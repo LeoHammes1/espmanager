@@ -53,12 +53,34 @@ func (r *DeviceRepository) SetPresence(ctx context.Context, id string, online bo
 	return err
 }
 
-func (r *DeviceRepository) Touch(ctx context.Context, id string, at time.Time) error {
+func (r *DeviceRepository) RecordHeartbeat(ctx context.Context, id, version string, at time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
-		insert into devices (id, online, last_seen_at) values (?, 1, ?)
-		on conflict(id) do update set last_seen_at = excluded.last_seen_at`,
-		id, at.UTC().Format(timeFormat))
+		insert into devices (id, online, last_seen_at, reported_version) values (?, 1, ?, ?)
+		on conflict(id) do update set
+			last_seen_at = excluded.last_seen_at,
+			reported_version = case when excluded.reported_version <> '' then excluded.reported_version else devices.reported_version end`,
+		id, at.UTC().Format(timeFormat), version)
 	return err
+}
+
+func (r *DeviceRepository) ListByDriver(ctx context.Context, driverID string) ([]device.Device, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select id, name, chip_type, flash_size, driver_id, online, last_seen_at, reported_version, enrolled_at
+		from devices where driver_id = ? order by id`, driverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []device.Device
+	for rows.Next() {
+		d, err := scanDevice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func (r *DeviceRepository) Assign(ctx context.Context, id, driverID string) error {

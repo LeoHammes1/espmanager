@@ -17,6 +17,7 @@ type Config struct {
 	SignerURL     string
 	SignerToken   string
 	BuildTimeout  time.Duration
+	PublicURL     string
 }
 
 func Load() Config {
@@ -32,6 +33,7 @@ func Load() Config {
 		SignerURL:     env("ESPM_SIGNER_URL", "http://localhost:8090"),
 		SignerToken:   env("ESPM_SIGNER_TOKEN", ""),
 		BuildTimeout:  envDuration("ESPM_BUILD_TIMEOUT", 30*time.Minute),
+		PublicURL:     env("ESPM_PUBLIC_URL", ""),
 	}
 }
 

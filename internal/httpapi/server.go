@@ -26,10 +26,15 @@ type DriverService interface {
 	Create(ctx context.Context, in driver.NewDriver) (driver.Driver, error)
 }
 
+type Deployer interface {
+	Rollout(ctx context.Context, driverID, version string) error
+}
+
 type Options struct {
 	Devices       DeviceService
 	Drivers       DriverService
 	Artifacts     ArtifactStore
+	Deployer      Deployer
 	Hub           *SSEHub
 	Templates     *template.Template
 	Queue         *queue.Queue
@@ -59,7 +64,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 		wr.Use(httpx.BearerAuth(opts.WorkerToken))
 		wr.Get("/v1/jobs/next", nextJob(opts.Queue))
 		wr.Post("/v1/jobs/{id}/complete", completeJob(opts.Queue))
-		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts))
+		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts, opts.Deployer))
 	})
 
 	r.Group(func(ur chi.Router) {

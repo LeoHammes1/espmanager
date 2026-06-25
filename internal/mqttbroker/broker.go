@@ -7,23 +7,23 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 )
 
-type Tracker interface {
+type Presence interface {
 	Connected(id string)
 	Disconnected(id string)
-	Seen(id, topic string, payload []byte)
 }
 
 type Broker struct {
-	server *mqtt.Server
+	server  *mqtt.Server
+	nextSub int
 }
 
-func New(addr string, tracker Tracker) (*Broker, error) {
+func New(addr string, presence Presence) (*Broker, error) {
 	server := mqtt.New(&mqtt.Options{InlineClient: true})
 
 	if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
 		return nil, err
 	}
-	if err := server.AddHook(&presenceHook{tracker: tracker}, nil); err != nil {
+	if err := server.AddHook(&presenceHook{presence: presence}, nil); err != nil {
 		return nil, err
 	}
 	if err := server.AddListener(listeners.NewTCP(listeners.Config{ID: "tcp", Address: addr})); err != nil {
@@ -37,16 +37,27 @@ func (b *Broker) Start() error { return b.server.Serve() }
 
 func (b *Broker) Close() error { return b.server.Close() }
 
+func (b *Broker) Publish(topic string, payload []byte) error {
+	return b.server.Publish(topic, payload, false, 1)
+}
+
+func (b *Broker) Subscribe(filter string, handler func(topic string, payload []byte)) error {
+	b.nextSub++
+	return b.server.Subscribe(filter, b.nextSub, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
+		handler(pk.TopicName, pk.Payload)
+	})
+}
+
 type presenceHook struct {
 	mqtt.HookBase
-	tracker Tracker
+	presence Presence
 }
 
 func (h *presenceHook) ID() string { return "presence" }
 
 func (h *presenceHook) Provides(b byte) bool {
 	switch b {
-	case mqtt.OnConnect, mqtt.OnDisconnect, mqtt.OnPublish:
+	case mqtt.OnConnect, mqtt.OnDisconnect:
 		return true
 	default:
 		return false
@@ -54,15 +65,10 @@ func (h *presenceHook) Provides(b byte) bool {
 }
 
 func (h *presenceHook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
-	h.tracker.Connected(cl.ID)
+	h.presence.Connected(cl.ID)
 	return nil
 }
 
 func (h *presenceHook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
-	h.tracker.Disconnected(cl.ID)
-}
-
-func (h *presenceHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {
-	h.tracker.Seen(cl.ID, pk.TopicName, pk.Payload)
-	return pk, nil
+	h.presence.Disconnected(cl.ID)
 }

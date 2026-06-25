@@ -24,7 +24,7 @@ type ArtifactStore interface {
 	Path(driverID, version string) string
 }
 
-func uploadArtifact(store ArtifactStore) http.HandlerFunc {
+func uploadArtifact(store ArtifactStore, deployer Deployer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxArtifactSize+maxFormSlack)
 		if err := r.ParseMultipartForm(maxFormSlack); err != nil {
@@ -76,6 +76,9 @@ func uploadArtifact(store ArtifactStore) http.HandlerFunc {
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
+			if deployer != nil {
+				_ = deployer.Rollout(r.Context(), a.DriverID, a.Version)
+			}
 			httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 				"driver_id": a.DriverID,
 				"version":   a.Version,

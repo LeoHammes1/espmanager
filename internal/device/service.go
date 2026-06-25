@@ -22,6 +22,18 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 	return s.repo.List(ctx)
 }
 
+func (s *Service) IDsForDriver(ctx context.Context, driverID string) ([]string, error) {
+	devices, err := s.repo.ListByDriver(ctx, driverID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(devices))
+	for _, d := range devices {
+		ids = append(ids, d.ID)
+	}
+	return ids, nil
+}
+
 func (s *Service) Assign(ctx context.Context, id, driverID string) error {
 	if driverID != "" {
 		exists, err := s.drivers.Exists(ctx, driverID)
@@ -47,8 +59,8 @@ func (s *Service) Disconnected(id string) {
 	s.apply(id, s.repo.SetPresence(context.Background(), id, false, s.now()))
 }
 
-func (s *Service) Seen(id, topic string, payload []byte) {
-	s.apply(id, s.repo.Touch(context.Background(), id, s.now()))
+func (s *Service) Heartbeat(id, version string) {
+	s.apply(id, s.repo.RecordHeartbeat(context.Background(), id, version, s.now()))
 }
 
 func (s *Service) apply(id string, err error) {

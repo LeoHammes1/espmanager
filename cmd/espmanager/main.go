@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/LeoHammes1/espmanager/internal/artifact"
 	"github.com/LeoHammes1/espmanager/internal/config"
+	"github.com/LeoHammes1/espmanager/internal/deploy"
 	"github.com/LeoHammes1/espmanager/internal/device"
 	"github.com/LeoHammes1/espmanager/internal/driver"
 	"github.com/LeoHammes1/espmanager/internal/httpapi"
@@ -21,6 +23,7 @@ import (
 	"github.com/LeoHammes1/espmanager/internal/queue"
 	"github.com/LeoHammes1/espmanager/internal/signclient"
 	sqlitestore "github.com/LeoHammes1/espmanager/internal/store/sqlite"
+	"github.com/LeoHammes1/espmanager/internal/topics"
 	"github.com/LeoHammes1/espmanager/internal/web"
 	"github.com/LeoHammes1/espmanager/internal/webhook"
 )
@@ -70,6 +73,12 @@ func run(log *slog.Logger) error {
 	defer broker.Close()
 	log.Info("mqtt broker listening", "addr", cfg.MQTTAddr)
 
+	deploySvc := deploy.NewService(sqlitestore.NewDeployRepository(db), deviceSvc, artifactSvc, broker, cfg.PublicURL, log)
+
+	if err := subscribeTelemetry(broker, deviceSvc, deploySvc); err != nil {
+		return err
+	}
+
 	tmpl, err := template.ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		return err
@@ -79,6 +88,7 @@ func run(log *slog.Logger) error {
 		Devices:       deviceSvc,
 		Drivers:       driverSvc,
 		Artifacts:     artifactSvc,
+		Deployer:      deploySvc,
 		Hub:           hub,
 		Templates:     tmpl,
 		Queue:         jobs,
@@ -115,3 +125,34 @@ func run(log *slog.Logger) error {
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
 }
+
+func subscribeTelemetry(broker *mqttbroker.Broker, devices *device.Service, deploys *deploy.Service) error {
+	if err := broker.Subscribe(topics.StateFilter(), func(topic string, payload []byte) {
+		id, ok := topics.DeviceFromTopic(topic)
+		if !ok {
+			return
+		}
+		version := parseVersion(payload)
+		devices.Heartbeat(id, version)
+		deploys.OnHeartbeat(context.Background(), id, version)
+	}); err != nil {
+		return err
+	}
+
+	return broker.Subscribe(topics.OTAStatusFilter(), func(topic string, payload []byte) {
+		id, ok := topics.DeviceFromTopic(topic)
+		if !ok {
+			return
+		}
+		deploys.OnStatus(context.Background(), id, payload)
+	})
+}
+
+func parseVersion(payload []byte) string {
+	var msg struct {
+		Version string `json:"version"`
+	}
+	_ = json.Unmarshal(payload, &msg)
+	return msg.Version
+}
+
