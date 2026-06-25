@@ -27,7 +27,6 @@ type Repository interface {
 	List(ctx context.Context) ([]Device, error)
 	Get(ctx context.Context, id string) (Device, error)
 	ListByDriver(ctx context.Context, driverID string) ([]Device, error)
-	Ensure(ctx context.Context, id string, at time.Time) error
 	SetPresence(ctx context.Context, id string, online bool, at time.Time) error
 	RecordHeartbeat(ctx context.Context, id, version string, at time.Time) error
 	Assign(ctx context.Context, id, driverID string) error

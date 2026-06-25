@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/LeoHammes1/espmanager/internal/enroll"
@@ -21,7 +22,7 @@ func enrollDevice(enroller Enroller, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t, err := enroller.Mint(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		render(w, tmpl, "device_enrolled.html", map[string]string{
@@ -31,7 +32,7 @@ func enrollDevice(enroller Enroller, tmpl *template.Template) http.HandlerFunc {
 	}
 }
 
-func claimDevice(enroller Enroller) http.HandlerFunc {
+func claimDevice(enroller Enroller, log *slog.Logger) http.HandlerFunc {
 	type request struct {
 		DeviceID string `json:"device_id"`
 		Token    string `json:"token"`
@@ -46,11 +47,14 @@ func claimDevice(enroller Enroller) http.HandlerFunc {
 		password, err := enroller.Claim(r.Context(), req.DeviceID, req.Token)
 		switch {
 		case errors.Is(err, enroll.ErrInvalidDevice):
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "invalid device id", http.StatusBadRequest)
 		case errors.Is(err, enroll.ErrInvalidToken):
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			http.Error(w, "invalid or expired claim token", http.StatusUnauthorized)
+		case errors.Is(err, enroll.ErrAlreadyEnrolled):
+			http.Error(w, "device already enrolled", http.StatusConflict)
 		case err != nil:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Error("device claim failed", "device", req.DeviceID, "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 		default:
 			httpx.WriteJSON(w, http.StatusOK, map[string]string{
 				"username": req.DeviceID,

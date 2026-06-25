@@ -12,11 +12,7 @@ type Token struct {
 
 type Repository interface {
 	CreateToken(ctx context.Context, t Token) error
-	ConsumeToken(ctx context.Context, value string, now time.Time) (bool, error)
-	SaveCredential(ctx context.Context, deviceID, passwordHash string, at time.Time) error
+	TokenValid(ctx context.Context, value string, now time.Time) (bool, error)
+	Claim(ctx context.Context, deviceID, token, passwordHash string, now time.Time) error
 	CredentialHash(ctx context.Context, deviceID string) (string, bool, error)
-}
-
-type DeviceEnroller interface {
-	Enroll(ctx context.Context, deviceID string) error
 }

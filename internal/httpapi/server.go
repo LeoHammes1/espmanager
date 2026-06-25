@@ -62,7 +62,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 	}
 
 	r.Get("/firmware/{driver}/{file}", serveFirmware(opts.Artifacts))
-	r.Post("/v1/claim", claimDevice(opts.Enroller))
+	r.With(middleware.Throttle(20)).Post("/v1/claim", claimDevice(opts.Enroller, opts.Log))
 
 	r.Group(func(wr chi.Router) {
 		wr.Use(httpx.BearerAuth(opts.WorkerToken))

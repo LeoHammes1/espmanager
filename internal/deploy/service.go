@@ -62,7 +62,11 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 		return nil
 	}
 
-	d := Deploy{ID: id.New(8), DriverID: driverID, Version: version, CreatedAt: s.now().UTC()}
+	deployID, err := id.New(8)
+	if err != nil {
+		return err
+	}
+	d := Deploy{ID: deployID, DriverID: driverID, Version: version, CreatedAt: s.now().UTC()}
 	if err := s.repo.CreateDeploy(ctx, d); err != nil {
 		return err
 	}

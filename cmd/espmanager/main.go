@@ -60,7 +60,7 @@ func run(log *slog.Logger) error {
 	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), driverSvc, hub, log)
 	signer := signclient.New(cfg.SignerURL, cfg.SignerToken, nil)
 	artifactSvc := artifact.NewService(sqlitestore.NewArtifactRepository(db), signer, driverSvc, cfg.ArtifactsDir)
-	enrollSvc := enroll.NewService(sqlitestore.NewEnrollRepository(db), deviceSvc, cfg.ClaimTTL)
+	enrollSvc := enroll.NewService(sqlitestore.NewEnrollRepository(db), cfg.ClaimTTL)
 	jobs := queue.New(db, "builds", cfg.BuildTimeout)
 
 	if cfg.AdminPassword == "" {

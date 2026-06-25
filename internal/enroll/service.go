@@ -12,25 +12,29 @@ import (
 )
 
 var (
-	ErrInvalidToken  = errors.New("enroll: invalid or expired claim token")
-	ErrInvalidDevice = errors.New("enroll: invalid device id")
+	ErrInvalidToken    = errors.New("enroll: invalid or expired claim token")
+	ErrInvalidDevice   = errors.New("enroll: invalid device id")
+	ErrAlreadyEnrolled = errors.New("enroll: device already enrolled")
 )
 
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
 
 type Service struct {
-	repo    Repository
-	devices DeviceEnroller
-	ttl     time.Duration
-	now     func() time.Time
+	repo Repository
+	ttl  time.Duration
+	now  func() time.Time
 }
 
-func NewService(repo Repository, devices DeviceEnroller, ttl time.Duration) *Service {
-	return &Service{repo: repo, devices: devices, ttl: ttl, now: time.Now}
+func NewService(repo Repository, ttl time.Duration) *Service {
+	return &Service{repo: repo, ttl: ttl, now: time.Now}
 }
 
 func (s *Service) Mint(ctx context.Context) (Token, error) {
-	t := Token{Value: id.New(24), ExpiresAt: s.now().UTC().Add(s.ttl)}
+	value, err := id.New(24)
+	if err != nil {
+		return Token{}, err
+	}
+	t := Token{Value: value, ExpiresAt: s.now().UTC().Add(s.ttl)}
 	if err := s.repo.CreateToken(ctx, t); err != nil {
 		return Token{}, err
 	}
@@ -42,23 +46,31 @@ func (s *Service) Claim(ctx context.Context, deviceID, token string) (string, er
 		return "", ErrInvalidDevice
 	}
 
-	consumed, err := s.repo.ConsumeToken(ctx, token, s.now().UTC())
+	now := s.now().UTC()
+	valid, err := s.repo.TokenValid(ctx, token, now)
 	if err != nil {
 		return "", err
 	}
-	if !consumed {
+	if !valid {
 		return "", ErrInvalidToken
 	}
+	switch _, found, err := s.repo.CredentialHash(ctx, deviceID); {
+	case err != nil:
+		return "", err
+	case found:
+		return "", ErrAlreadyEnrolled
+	}
 
-	password := id.New(24)
+	password, err := id.New(24)
+	if err != nil {
+		return "", err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-	if err := s.repo.SaveCredential(ctx, deviceID, string(hash), s.now().UTC()); err != nil {
-		return "", err
-	}
-	if err := s.devices.Enroll(ctx, deviceID); err != nil {
+
+	if err := s.repo.Claim(ctx, deviceID, token, string(hash), now); err != nil {
 		return "", err
 	}
 	return password, nil

@@ -8,12 +8,11 @@ import (
 
 type fakeRepo struct {
 	tokens      map[string]time.Time
-	used        map[string]bool
 	credentials map[string]string
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{tokens: map[string]time.Time{}, used: map[string]bool{}, credentials: map[string]string{}}
+	return &fakeRepo{tokens: map[string]time.Time{}, credentials: map[string]string{}}
 }
 
 func (r *fakeRepo) CreateToken(_ context.Context, t Token) error {
@@ -21,16 +20,20 @@ func (r *fakeRepo) CreateToken(_ context.Context, t Token) error {
 	return nil
 }
 
-func (r *fakeRepo) ConsumeToken(_ context.Context, value string, now time.Time) (bool, error) {
+func (r *fakeRepo) TokenValid(_ context.Context, value string, now time.Time) (bool, error) {
 	exp, ok := r.tokens[value]
-	if !ok || r.used[value] || !now.Before(exp) {
-		return false, nil
-	}
-	r.used[value] = true
-	return true, nil
+	return ok && now.Before(exp), nil
 }
 
-func (r *fakeRepo) SaveCredential(_ context.Context, deviceID, passwordHash string, _ time.Time) error {
+func (r *fakeRepo) Claim(_ context.Context, deviceID, token, passwordHash string, now time.Time) error {
+	exp, ok := r.tokens[token]
+	if !ok || !now.Before(exp) {
+		return ErrInvalidToken
+	}
+	if _, exists := r.credentials[deviceID]; exists {
+		return ErrAlreadyEnrolled
+	}
+	delete(r.tokens, token)
 	r.credentials[deviceID] = passwordHash
 	return nil
 }
@@ -40,18 +43,8 @@ func (r *fakeRepo) CredentialHash(_ context.Context, deviceID string) (string, b
 	return h, ok, nil
 }
 
-type fakeEnroller struct{ enrolled []string }
-
-func (e *fakeEnroller) Enroll(_ context.Context, deviceID string) error {
-	e.enrolled = append(e.enrolled, deviceID)
-	return nil
-}
-
 func TestClaimIssuesUsableCredentials(t *testing.T) {
-	repo := newFakeRepo()
-	en := &fakeEnroller{}
-	svc := NewService(repo, en, 15*time.Minute)
-
+	svc := NewService(newFakeRepo(), 15*time.Minute)
 	tok, err := svc.Mint(context.Background())
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -67,13 +60,10 @@ func TestClaimIssuesUsableCredentials(t *testing.T) {
 	if svc.Authenticate(context.Background(), "001122aabbcc", "wrong") {
 		t.Fatal("wrong password must not authenticate")
 	}
-	if len(en.enrolled) != 1 || en.enrolled[0] != "001122aabbcc" {
-		t.Fatalf("device should be enrolled, got %v", en.enrolled)
-	}
 }
 
 func TestClaimTokenIsSingleUse(t *testing.T) {
-	svc := NewService(newFakeRepo(), &fakeEnroller{}, 15*time.Minute)
+	svc := NewService(newFakeRepo(), 15*time.Minute)
 	tok, _ := svc.Mint(context.Background())
 
 	if _, err := svc.Claim(context.Background(), "dev1", tok.Value); err != nil {
@@ -85,8 +75,7 @@ func TestClaimTokenIsSingleUse(t *testing.T) {
 }
 
 func TestClaimRejectsExpiredToken(t *testing.T) {
-	repo := newFakeRepo()
-	svc := NewService(repo, &fakeEnroller{}, -time.Minute)
+	svc := NewService(newFakeRepo(), -time.Minute)
 	tok, _ := svc.Mint(context.Background())
 	if _, err := svc.Claim(context.Background(), "dev1", tok.Value); err != ErrInvalidToken {
 		t.Fatalf("expected ErrInvalidToken on expired token, got %v", err)
@@ -94,9 +83,21 @@ func TestClaimRejectsExpiredToken(t *testing.T) {
 }
 
 func TestClaimRejectsInvalidDeviceID(t *testing.T) {
-	svc := NewService(newFakeRepo(), &fakeEnroller{}, 15*time.Minute)
+	svc := NewService(newFakeRepo(), 15*time.Minute)
 	tok, _ := svc.Mint(context.Background())
 	if _, err := svc.Claim(context.Background(), "bad id/../x", tok.Value); err != ErrInvalidDevice {
 		t.Fatalf("expected ErrInvalidDevice, got %v", err)
+	}
+}
+
+func TestClaimRejectsAlreadyEnrolledDevice(t *testing.T) {
+	svc := NewService(newFakeRepo(), 15*time.Minute)
+	first, _ := svc.Mint(context.Background())
+	if _, err := svc.Claim(context.Background(), "dev1", first.Value); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	second, _ := svc.Mint(context.Background())
+	if _, err := svc.Claim(context.Background(), "dev1", second.Value); err != ErrAlreadyEnrolled {
+		t.Fatalf("expected ErrAlreadyEnrolled, got %v", err)
 	}
 }

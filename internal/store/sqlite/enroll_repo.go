@@ -18,33 +18,64 @@ func NewEnrollRepository(db *sql.DB) *EnrollRepository {
 }
 
 func (r *EnrollRepository) CreateToken(ctx context.Context, t enroll.Token) error {
+	if _, err := r.db.ExecContext(ctx,
+		`delete from claim_tokens where expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ')`); err != nil {
+		return err
+	}
 	_, err := r.db.ExecContext(ctx,
 		`insert into claim_tokens (token, expires_at) values (?, ?)`,
 		t.Value, t.ExpiresAt.UTC().Format(timeFormat))
 	return err
 }
 
-func (r *EnrollRepository) ConsumeToken(ctx context.Context, value string, now time.Time) (bool, error) {
-	res, err := r.db.ExecContext(ctx, `
-		update claim_tokens set used_at = ?
-		where token = ? and used_at = '' and expires_at > ?`,
-		now.UTC().Format(timeFormat), value, now.UTC().Format(timeFormat))
+func (r *EnrollRepository) TokenValid(ctx context.Context, value string, now time.Time) (bool, error) {
+	var one int
+	err := r.db.QueryRowContext(ctx,
+		`select 1 from claim_tokens where token = ? and expires_at > ?`,
+		value, now.UTC().Format(timeFormat)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n == 1, nil
+	return true, nil
 }
 
-func (r *EnrollRepository) SaveCredential(ctx context.Context, deviceID, passwordHash string, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `
-		insert into device_credentials (device_id, password_hash, created_at) values (?, ?, ?)
-		on conflict(device_id) do update set password_hash = excluded.password_hash, created_at = excluded.created_at`,
-		deviceID, passwordHash, at.UTC().Format(timeFormat))
-	return err
+func (r *EnrollRepository) Claim(ctx context.Context, deviceID, token, passwordHash string, now time.Time) error {
+	ts := now.UTC().Format(timeFormat)
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx,
+		`delete from claim_tokens where token = ? and expires_at > ?`, token, ts)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return enroll.ErrInvalidToken
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`insert into device_credentials (device_id, password_hash, created_at) values (?, ?, ?)`,
+		deviceID, passwordHash, ts); err != nil {
+		if isUniqueViolation(err) {
+			return enroll.ErrAlreadyEnrolled
+		}
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`insert into devices (id, enrolled_at) values (?, ?) on conflict(id) do nothing`,
+		deviceID, ts); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (r *EnrollRepository) CredentialHash(ctx context.Context, deviceID string) (string, bool, error) {

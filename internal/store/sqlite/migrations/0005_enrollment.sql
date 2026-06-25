@@ -1,8 +1,7 @@
 create table claim_tokens (
   token text primary key,
   created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ')),
-  expires_at text not null,
-  used_at text not null default ''
+  expires_at text not null
 ) strict;
 
 create table device_credentials (

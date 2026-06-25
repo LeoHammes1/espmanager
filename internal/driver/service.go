@@ -47,13 +47,22 @@ func (s *Service) Create(ctx context.Context, in NewDriver) (Driver, error) {
 		branch = "main"
 	}
 
+	driverID, err := id.New(8)
+	if err != nil {
+		return Driver{}, err
+	}
+	secret, err := id.New(32)
+	if err != nil {
+		return Driver{}, err
+	}
+
 	d := Driver{
-		ID:            id.New(8),
+		ID:            driverID,
 		Name:          name,
 		RepoURL:       repoURL,
 		Branch:        branch,
 		PioEnv:        strings.TrimSpace(in.PioEnv),
-		WebhookSecret: id.New(32),
+		WebhookSecret: secret,
 		CreatedAt:     s.now().UTC(),
 	}
 	if err := s.repo.Create(ctx, d); err != nil {

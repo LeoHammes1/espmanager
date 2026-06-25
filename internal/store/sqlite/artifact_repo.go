@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/LeoHammes1/espmanager/internal/artifact"
@@ -26,7 +25,7 @@ func (r *ArtifactRepository) Create(ctx context.Context, a artifact.Artifact) er
 		values (?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.DriverID, a.Version, a.Commit, a.Env, a.SHA256, a.Signature, a.Size,
 		a.CreatedAt.UTC().Format(timeFormat))
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint failed") {
+	if isUniqueViolation(err) {
 		return artifact.ErrAlreadyExists
 	}
 	return err

@@ -34,14 +34,6 @@ func (s *Service) IDsForDriver(ctx context.Context, driverID string) ([]string, 
 	return ids, nil
 }
 
-func (s *Service) Enroll(ctx context.Context, id string) error {
-	if err := s.repo.Ensure(ctx, id, s.now()); err != nil {
-		return err
-	}
-	s.notifier.DeviceChanged()
-	return nil
-}
-
 func (s *Service) Assign(ctx context.Context, id, driverID string) error {
 	if driverID != "" {
 		exists, err := s.drivers.Exists(ctx, driverID)

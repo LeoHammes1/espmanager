@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 )
 
-func New(n int) string {
+func New(n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
