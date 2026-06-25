@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESPManager — Driver criado</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  {{template "nav"}}
+  <main>
+    <h1>Driver "{{.Name}}" criado</h1>
+    <p class="warn">Guarde o segredo agora — ele não será exibido novamente.</p>
+    <dl class="secret">
+      <dt>Webhook URL</dt>
+      <dd><code>{{.WebhookURL}}</code></dd>
+      <dt>Webhook secret</dt>
+      <dd><code>{{.WebhookSecret}}</code></dd>
+    </dl>
+    <p><a href="/drivers">Voltar para drivers</a></p>
+  </main>
+</body>
+</html>

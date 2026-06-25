@@ -22,12 +22,12 @@ func (c *PlatformIOCompiler) Compile(ctx context.Context, job Job) (string, erro
 		return "", err
 	}
 
-	if err := run(ctx, dir, "git", "clone", "--depth", "1", job.Repo, dir); err != nil {
+	if err := run(ctx, dir, "git", "clone", "--depth", "1", "--", job.Repo, dir); err != nil {
 		return "", fmt.Errorf("clone: %w", err)
 	}
 	if job.Commit != "" {
-		if err := run(ctx, dir, "git", "fetch", "--depth", "1", "origin", job.Commit); err == nil {
-			_ = run(ctx, dir, "git", "checkout", job.Commit)
+		if err := run(ctx, dir, "git", "fetch", "--depth", "1", "origin", "--end-of-options", job.Commit); err == nil {
+			_ = run(ctx, dir, "git", "checkout", "--detach", "--end-of-options", job.Commit)
 		}
 	}
 
@@ -47,5 +47,6 @@ func run(ctx context.Context, dir, name string, args ...string) error {
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL=http:https")
 	return cmd.Run()
 }

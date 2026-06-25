@@ -15,7 +15,6 @@
       <input name="repo_url" placeholder="https://git.exemplo/repo.git" required>
       <input name="branch" placeholder="main">
       <input name="pio_env" placeholder="esp32dev">
-      <input name="partition_scheme" placeholder="partições (opcional)">
       <button type="submit">Criar driver</button>
     </form>
     <table class="grid">
@@ -25,7 +24,7 @@
           <th>Repositório</th>
           <th>Branch</th>
           <th>Env</th>
-          <th>Webhook secret</th>
+          <th>Webhook</th>
           <th>Criado</th>
         </tr>
       </thead>
@@ -36,7 +35,7 @@
           <td>{{.RepoURL}}</td>
           <td>{{.Branch}}</td>
           <td>{{if .PioEnv}}{{.PioEnv}}{{else}}—{{end}}</td>
-          <td><code>{{.WebhookSecret}}</code></td>
+          <td><code>{{.WebhookURL}}</code></td>
           <td>{{.CreatedAt}}</td>
         </tr>
         {{else}}

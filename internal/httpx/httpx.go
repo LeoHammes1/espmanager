@@ -25,3 +25,25 @@ func BearerAuth(token string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+func BasicAuth(user, password string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if password == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			u, p, ok := r.BasicAuth()
+			if !ok || !equal(u, user) || !equal(p, password) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="ESPManager"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func equal(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}

@@ -8,13 +8,14 @@ import (
 
 type Service struct {
 	repo     Repository
+	drivers  DriverChecker
 	notifier Notifier
 	log      *slog.Logger
 	now      func() time.Time
 }
 
-func NewService(repo Repository, notifier Notifier, log *slog.Logger) *Service {
-	return &Service{repo: repo, notifier: notifier, log: log, now: time.Now}
+func NewService(repo Repository, drivers DriverChecker, notifier Notifier, log *slog.Logger) *Service {
+	return &Service{repo: repo, drivers: drivers, notifier: notifier, log: log, now: time.Now}
 }
 
 func (s *Service) List(ctx context.Context) ([]Device, error) {
@@ -22,6 +23,15 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 }
 
 func (s *Service) Assign(ctx context.Context, id, driverID string) error {
+	if driverID != "" {
+		exists, err := s.drivers.Exists(ctx, driverID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrDriverNotFound
+		}
+	}
 	if err := s.repo.Assign(ctx, id, driverID); err != nil {
 		return err
 	}

@@ -8,6 +8,8 @@ services:
       - "1883:1883"
     environment:
       ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
+      ESPM_ADMIN_USER: ${ESPM_ADMIN_USER:-admin}
+      ESPM_ADMIN_PASSWORD: ${ESPM_ADMIN_PASSWORD:-}
     volumes:
       - core-data:/app/data
     restart: unless-stopped

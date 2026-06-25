@@ -27,13 +27,15 @@ type DriverService interface {
 }
 
 type Options struct {
-	Devices     DeviceService
-	Drivers     DriverService
-	Hub         *SSEHub
-	Templates   *template.Template
-	Queue       *queue.Queue
-	Webhook     http.Handler
-	WorkerToken string
+	Devices       DeviceService
+	Drivers       DriverService
+	Hub           *SSEHub
+	Templates     *template.Template
+	Queue         *queue.Queue
+	Webhook       http.Handler
+	WorkerToken   string
+	AdminUser     string
+	AdminPassword string
 }
 
 func NewRouter(opts Options) (http.Handler, error) {
@@ -46,21 +48,24 @@ func NewRouter(opts Options) (http.Handler, error) {
 	}
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
-	r.Get("/", renderPage(opts.Devices, opts.Drivers, opts.Templates, "index.html"))
-	r.Get("/partials/devices", renderPage(opts.Devices, opts.Drivers, opts.Templates, "devices"))
-	r.Post("/devices/{id}/driver", assignDriver(opts.Devices))
-	r.Get("/drivers", driversPage(opts.Drivers, opts.Templates))
-	r.Post("/drivers", createDriver(opts.Drivers))
-	r.Get("/events", opts.Hub.Handler())
-
 	if opts.Webhook != nil {
-		r.Method(http.MethodPost, "/webhook/git", opts.Webhook)
+		r.Post("/webhook/git/{driverID}", opts.Webhook.ServeHTTP)
 	}
 
-	r.Group(func(pr chi.Router) {
-		pr.Use(httpx.BearerAuth(opts.WorkerToken))
-		pr.Get("/v1/jobs/next", nextJob(opts.Queue))
-		pr.Post("/v1/jobs/{id}/complete", completeJob(opts.Queue))
+	r.Group(func(wr chi.Router) {
+		wr.Use(httpx.BearerAuth(opts.WorkerToken))
+		wr.Get("/v1/jobs/next", nextJob(opts.Queue))
+		wr.Post("/v1/jobs/{id}/complete", completeJob(opts.Queue))
+	})
+
+	r.Group(func(ur chi.Router) {
+		ur.Use(httpx.BasicAuth(opts.AdminUser, opts.AdminPassword))
+		ur.Get("/", renderPage(opts.Devices, opts.Drivers, opts.Templates, "index.html"))
+		ur.Get("/partials/devices", renderPage(opts.Devices, opts.Drivers, opts.Templates, "devices"))
+		ur.Post("/devices/{id}/driver", assignDriver(opts.Devices))
+		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates))
+		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates))
+		ur.Get("/events", opts.Hub.Handler())
 	})
 
 	return r, nil

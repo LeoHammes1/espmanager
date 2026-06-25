@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/LeoHammes1/espmanager/internal/device"
 )
 
 type deviceView struct {
@@ -36,10 +39,7 @@ func renderPage(devices DeviceService, drivers DriverService, tmpl *template.Tem
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		render(w, tmpl, name, data)
 	}
 }
 
@@ -76,11 +76,17 @@ func pageDataFor(ctx context.Context, devices DeviceService, drivers DriverServi
 
 func assignDriver(devices DeviceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := devices.Assign(r.Context(), chi.URLParam(r, "id"), r.FormValue("driver_id")); err != nil {
+		err := devices.Assign(r.Context(), chi.URLParam(r, "id"), r.FormValue("driver_id"))
+		switch {
+		case errors.Is(err, device.ErrDeviceNotFound):
+			http.Error(w, "device not found", http.StatusNotFound)
+		case errors.Is(err, device.ErrDriverNotFound):
+			http.Error(w, "driver not found", http.StatusBadRequest)
+		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		default:
+			http.Redirect(w, r, "/", http.StatusSeeOther)
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
 }
 

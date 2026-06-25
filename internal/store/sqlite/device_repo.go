@@ -62,8 +62,18 @@ func (r *DeviceRepository) Touch(ctx context.Context, id string, at time.Time) e
 }
 
 func (r *DeviceRepository) Assign(ctx context.Context, id, driverID string) error {
-	_, err := r.db.ExecContext(ctx, `update devices set driver_id = ? where id = ?`, driverID, id)
-	return err
+	res, err := r.db.ExecContext(ctx, `update devices set driver_id = ? where id = ?`, driverID, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return device.ErrDeviceNotFound
+	}
+	return nil
 }
 
 type rowScanner interface {

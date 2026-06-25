@@ -137,3 +137,19 @@ code {
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+.warn {
+  color: #f0c674;
+}
+
+dl.secret dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.75rem;
+}
+
+dl.secret dd {
+  margin: 0.2rem 0 0;
+}

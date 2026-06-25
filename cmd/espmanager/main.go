@@ -48,9 +48,13 @@ func run(log *slog.Logger) error {
 	defer db.Close()
 
 	hub := httpapi.NewSSEHub()
-	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), hub, log)
 	driverSvc := driver.NewService(sqlitestore.NewDriverRepository(db))
+	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), driverSvc, hub, log)
 	jobs := queue.New(db, "builds")
+
+	if cfg.AdminPassword == "" {
+		log.Warn("management UI is unauthenticated; set ESPM_ADMIN_PASSWORD to require login")
+	}
 
 	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc)
 	if err != nil {
@@ -68,13 +72,15 @@ func run(log *slog.Logger) error {
 	}
 
 	router, err := httpapi.NewRouter(httpapi.Options{
-		Devices:     deviceSvc,
-		Drivers:     driverSvc,
-		Hub:         hub,
-		Templates:   tmpl,
-		Queue:       jobs,
-		Webhook:     webhook.NewHandler(driverSvc, jobs, log),
-		WorkerToken: cfg.WorkerToken,
+		Devices:       deviceSvc,
+		Drivers:       driverSvc,
+		Hub:           hub,
+		Templates:     tmpl,
+		Queue:         jobs,
+		Webhook:       webhook.NewHandler(driverSvc, jobs, log),
+		WorkerToken:   cfg.WorkerToken,
+		AdminUser:     cfg.AdminUser,
+		AdminPassword: cfg.AdminPassword,
 	})
 	if err != nil {
 		return err

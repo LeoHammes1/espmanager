@@ -9,17 +9,27 @@ import (
 )
 
 type driverView struct {
-	ID            string
-	Name          string
-	RepoURL       string
-	Branch        string
-	PioEnv        string
-	WebhookSecret string
-	CreatedAt     string
+	ID         string
+	Name       string
+	RepoURL    string
+	Branch     string
+	PioEnv     string
+	WebhookURL string
+	CreatedAt  string
 }
 
 type driversData struct {
 	Drivers []driverView
+}
+
+type createdDriverData struct {
+	Name          string
+	WebhookURL    string
+	WebhookSecret string
+}
+
+func webhookPath(driverID string) string {
+	return "/webhook/git/" + driverID
 }
 
 func driversPage(drivers DriverService, tmpl *template.Template) http.HandlerFunc {
@@ -33,39 +43,46 @@ func driversPage(drivers DriverService, tmpl *template.Template) http.HandlerFun
 		data := driversData{Drivers: make([]driverView, 0, len(list))}
 		for _, d := range list {
 			data.Drivers = append(data.Drivers, driverView{
-				ID:            d.ID,
-				Name:          d.Name,
-				RepoURL:       d.RepoURL,
-				Branch:        d.Branch,
-				PioEnv:        d.PioEnv,
-				WebhookSecret: d.WebhookSecret,
-				CreatedAt:     d.CreatedAt.Format("2006-01-02 15:04"),
+				ID:         d.ID,
+				Name:       d.Name,
+				RepoURL:    d.RepoURL,
+				Branch:     d.Branch,
+				PioEnv:     d.PioEnv,
+				WebhookURL: webhookPath(d.ID),
+				CreatedAt:  d.CreatedAt.Format("2006-01-02 15:04"),
 			})
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, "drivers.html", data); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		render(w, tmpl, "drivers.html", data)
 	}
 }
 
-func createDriver(drivers DriverService) http.HandlerFunc {
+func createDriver(drivers DriverService, tmpl *template.Template) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, err := drivers.Create(r.Context(), driver.NewDriver{
-			Name:            r.FormValue("name"),
-			RepoURL:         r.FormValue("repo_url"),
-			Branch:          r.FormValue("branch"),
-			PioEnv:          r.FormValue("pio_env"),
-			PartitionScheme: r.FormValue("partition_scheme"),
+		d, err := drivers.Create(r.Context(), driver.NewDriver{
+			Name:    r.FormValue("name"),
+			RepoURL: r.FormValue("repo_url"),
+			Branch:  r.FormValue("branch"),
+			PioEnv:  r.FormValue("pio_env"),
 		})
 		switch {
-		case errors.Is(err, driver.ErrInvalid):
+		case errors.Is(err, driver.ErrInvalid), errors.Is(err, driver.ErrInvalidRepo):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
-			http.Redirect(w, r, "/drivers", http.StatusSeeOther)
+			render(w, tmpl, "driver_created.html", createdDriverData{
+				Name:          d.Name,
+				WebhookURL:    webhookPath(d.ID),
+				WebhookSecret: d.WebhookSecret,
+			})
 		}
+	}
+}
+
+func render(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

@@ -2,7 +2,13 @@ package device
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrDeviceNotFound = errors.New("device: not found")
+	ErrDriverNotFound = errors.New("device: driver not found")
 )
 
 type Device struct {
@@ -27,4 +33,8 @@ type Repository interface {
 
 type Notifier interface {
 	DeviceChanged()
+}
+
+type DriverChecker interface {
+	Exists(ctx context.Context, driverID string) (bool, error)
 }
