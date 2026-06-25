@@ -2,6 +2,7 @@ package mqttbroker
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -112,5 +113,8 @@ func (h *presenceHook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
 }
 
 func (h *presenceHook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
+	if errors.Is(cl.StopCause(), packets.ErrSessionTakenOver) {
+		return
+	}
 	h.presence.Disconnected(cl.ID)
 }
