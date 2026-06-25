@@ -12,6 +12,7 @@ type Artifact struct {
 	Env       string
 	SHA256    string
 	Signature string
+	Sequence  int64
 	Size      int64
 	CreatedAt time.Time
 }
@@ -24,6 +25,7 @@ type Repository interface {
 	Create(ctx context.Context, a Artifact) error
 	Get(ctx context.Context, driverID, version string) (Artifact, error)
 	Delete(ctx context.Context, driverID, version string) error
+	NextSequence(ctx context.Context) (int64, error)
 }
 
 type Signer interface {

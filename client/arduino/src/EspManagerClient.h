@@ -53,6 +53,8 @@ private:
 	String otaURL_;
 	String otaSha_;
 	String otaSig_;
+	uint64_t otaSeq_;
+	uint64_t otaFloor_;
 
 	WiFiClient net_;
 	PubSubClient mqtt_;

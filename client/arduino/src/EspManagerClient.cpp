@@ -11,6 +11,7 @@ namespace {
 constexpr char prefsNamespace[] = "espm";
 constexpr char prefsPasswordKey[] = "mqttpass";
 constexpr char prefsOtaTargetKey[] = "otatarget";
+constexpr char prefsOtaSeqKey[] = "otaseq";
 constexpr uint32_t reconnectIntervalMs = 5000;
 constexpr uint32_t claimRetryIntervalMs = 15000;
 constexpr uint32_t wifiRetryIntervalMs = 30000;
@@ -18,8 +19,8 @@ constexpr uint32_t otaIdleTimeoutMs = 15000;
 }
 
 EspManagerClient::EspManagerClient(const EspManagerConfig &cfg)
-	: cfg_(cfg), otaPending_(false), mqtt_(net_), lastHeartbeat_(0),
-	  lastReconnectAttempt_(0), lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
+	: cfg_(cfg), otaPending_(false), otaSeq_(0), otaFloor_(0), mqtt_(net_),
+	  lastHeartbeat_(0), lastReconnectAttempt_(0), lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
 
 void EspManagerClient::begin() {
 	WiFi.mode(WIFI_STA);
@@ -28,6 +29,7 @@ void EspManagerClient::begin() {
 	prefs_.begin(prefsNamespace, true);
 	password_ = prefs_.getString(prefsPasswordKey, "");
 	otaTarget_ = prefs_.getString(prefsOtaTargetKey, "");
+	otaFloor_ = prefs_.getULong64(prefsOtaSeqKey, 0);
 	prefs_.end();
 
 	mqtt_.setServer(cfg_.host, cfg_.mqttPort);
@@ -205,7 +207,11 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 
 	String version = cmd["version"].as<String>();
 	String url = cmd["url"].as<String>();
+	uint64_t sequence = cmd["sequence"].as<uint64_t>();
 	if (version.length() == 0 || url.length() == 0 || version == cfg_.firmwareVersion) {
+		return;
+	}
+	if (sequence <= otaFloor_) {
 		return;
 	}
 
@@ -213,6 +219,7 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 	otaURL_ = url;
 	otaSha_ = cmd["sha256"].as<String>();
 	otaSig_ = cmd["signature"].as<String>();
+	otaSeq_ = sequence;
 	otaPending_ = true;
 }
 
@@ -288,8 +295,15 @@ void EspManagerClient::applyOTA() {
 
 	uint8_t digest[32];
 	sha.finalize(digest, sizeof(digest));
+
+	uint8_t signed_[40];
+	for (int i = 0; i < 8; i++) {
+		signed_[i] = (uint8_t)(otaSeq_ >> (8 * (7 - i)));
+	}
+	memcpy(signed_ + 8, digest, sizeof(digest));
+
 	if (memcmp(digest, expectedSha, sizeof(digest)) != 0 ||
-		!Ed25519::verify(signature, publicKey, digest, sizeof(digest))) {
+		!Ed25519::verify(signature, publicKey, signed_, sizeof(signed_))) {
 		Update.abort();
 		pendingStatus_ = "failed";
 		return;
@@ -301,8 +315,10 @@ void EspManagerClient::applyOTA() {
 	}
 
 	prefs_.begin(prefsNamespace, false);
+	prefs_.putULong64(prefsOtaSeqKey, otaSeq_);
 	size_t written = prefs_.putString(prefsOtaTargetKey, otaVersion_);
 	prefs_.end();
+	otaFloor_ = otaSeq_;
 	if (written != otaVersion_.length()) {
 		reportOTA("ok");
 	}

@@ -11,7 +11,7 @@ static EspManagerConfig makeConfig() {
 	c.httpPort = 8080;
 	c.mqttPort = 1883;
 	c.claimToken = ESPM_CLAIM_TOKEN;
-	c.firmwareVersion = "test-0.4.0";
+	c.firmwareVersion = "test-0.5.0";
 	c.signingPublicKeyHex = ESPM_SIGNING_PUBKEY;
 	c.heartbeatIntervalMs = 15000;
 	return c;

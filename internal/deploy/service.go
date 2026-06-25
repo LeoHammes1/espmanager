@@ -62,6 +62,7 @@ type otaCommand struct {
 	URL       string `json:"url"`
 	SHA256    string `json:"sha256"`
 	Signature string `json:"signature"`
+	Sequence  int64  `json:"sequence"`
 }
 
 func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
@@ -215,6 +216,7 @@ func (s *Service) command(driverID, version string, a artifact.Artifact) ([]byte
 		URL:       s.baseURL + artifact.FirmwarePath(driverID, version),
 		SHA256:    a.SHA256,
 		Signature: a.Signature,
+		Sequence:  a.Sequence,
 	})
 }
 

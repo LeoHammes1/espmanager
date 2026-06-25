@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -71,7 +72,11 @@ func (s *Service) Store(ctx context.Context, in NewArtifact) (Artifact, error) {
 	}
 
 	sum := sha256.Sum256(in.Content)
-	signature, err := s.signer.Sign(ctx, sum[:])
+	sequence, err := s.repo.NextSequence(ctx)
+	if err != nil {
+		return Artifact{}, err
+	}
+	signature, err := s.signer.Sign(ctx, signedMessage(sequence, sum[:]))
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -83,6 +88,7 @@ func (s *Service) Store(ctx context.Context, in NewArtifact) (Artifact, error) {
 		Env:       in.Env,
 		SHA256:    hex.EncodeToString(sum[:]),
 		Signature: hex.EncodeToString(signature),
+		Sequence:  sequence,
 		Size:      int64(len(in.Content)),
 		CreatedAt: s.now().UTC(),
 	}
@@ -102,6 +108,13 @@ func (s *Service) Get(ctx context.Context, driverID, version string) (Artifact, 
 
 func (s *Service) Path(driverID, version string) string {
 	return filepath.Join(s.dir, driverID, version+".bin")
+}
+
+func signedMessage(sequence int64, sha256 []byte) []byte {
+	msg := make([]byte, 8+len(sha256))
+	binary.BigEndian.PutUint64(msg[:8], uint64(sequence))
+	copy(msg[8:], sha256)
+	return msg
 }
 
 func (s *Service) writeFile(driverID, version string, content []byte) error {
