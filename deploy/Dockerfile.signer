@@ -1,0 +1,13 @@
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/espmanager-signer ./cmd/espmanager-signer
+
+FROM gcr.io/distroless/static-debian12
+WORKDIR /app
+COPY --from=build /out/espmanager-signer /usr/local/bin/espmanager-signer
+ENV ESPM_SIGNER_KEY=/app/data/signing.key
+EXPOSE 8090
+ENTRYPOINT ["espmanager-signer"]

@@ -1,0 +1,99 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"html/template"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/leohammes/espmanager/internal/config"
+	"github.com/leohammes/espmanager/internal/device"
+	"github.com/leohammes/espmanager/internal/httpapi"
+	"github.com/leohammes/espmanager/internal/mqttbroker"
+	"github.com/leohammes/espmanager/internal/queue"
+	sqlitestore "github.com/leohammes/espmanager/internal/store/sqlite"
+	"github.com/leohammes/espmanager/internal/web"
+	"github.com/leohammes/espmanager/internal/webhook"
+)
+
+func main() {
+	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if err := run(log); err != nil {
+		log.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(log *slog.Logger) error {
+	cfg := config.Load()
+
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
+		return err
+	}
+
+	db, err := sqlitestore.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	hub := httpapi.NewSSEHub()
+	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), hub, log)
+	jobs := queue.New(db, "builds")
+
+	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc)
+	if err != nil {
+		return err
+	}
+	if err := broker.Start(); err != nil {
+		return err
+	}
+	defer broker.Close()
+	log.Info("mqtt broker listening", "addr", cfg.MQTTAddr)
+
+	tmpl, err := template.ParseFS(web.FS, "templates/*.html")
+	if err != nil {
+		return err
+	}
+
+	router, err := httpapi.NewRouter(httpapi.Options{
+		Devices:     deviceSvc,
+		Hub:         hub,
+		Templates:   tmpl,
+		Queue:       jobs,
+		Webhook:     webhook.NewHandler(cfg.WebhookSecret, jobs, log),
+		WorkerToken: cfg.WorkerToken,
+	})
+	if err != nil {
+		return err
+	}
+
+	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Info("http server listening", "addr", cfg.HTTPAddr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("http server error", "err", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	log.Info("shutting down")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}

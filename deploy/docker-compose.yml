@@ -1,0 +1,44 @@
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.core
+    ports:
+      - "8080:8080"
+      - "1883:1883"
+    environment:
+      ESPM_WEBHOOK_SECRET: ${ESPM_WEBHOOK_SECRET:-changeme}
+      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
+    volumes:
+      - core-data:/app/data
+    restart: unless-stopped
+
+  builder:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.builder
+    environment:
+      ESPM_CORE_URL: http://core:8080
+      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
+    volumes:
+      - builder-data:/app/data
+      - platformio-cache:/root/.platformio
+    depends_on:
+      - core
+    restart: unless-stopped
+
+  signer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.signer
+    environment:
+      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:-changeme}
+    volumes:
+      - signer-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  core-data:
+  builder-data:
+  platformio-cache:
+  signer-data:
