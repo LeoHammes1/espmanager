@@ -36,6 +36,7 @@ type Options struct {
 	Drivers       DriverService
 	Artifacts     ArtifactStore
 	Deployer      Deployer
+	Enroller      Enroller
 	Hub           *SSEHub
 	Templates     *template.Template
 	Queue         *queue.Queue
@@ -61,6 +62,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 	}
 
 	r.Get("/firmware/{driver}/{file}", serveFirmware(opts.Artifacts))
+	r.Post("/v1/claim", claimDevice(opts.Enroller))
 
 	r.Group(func(wr chi.Router) {
 		wr.Use(httpx.BearerAuth(opts.WorkerToken))
@@ -76,6 +78,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 		ur.Post("/devices/{id}/driver", assignDriver(opts.Devices))
 		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates))
 		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates))
+		ur.Post("/devices/enroll", enrollDevice(opts.Enroller, opts.Templates))
 		ur.Get("/events", opts.Hub.Handler())
 	})
 

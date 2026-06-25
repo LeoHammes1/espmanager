@@ -20,6 +20,7 @@ import (
 	"github.com/LeoHammes1/espmanager/internal/deploy"
 	"github.com/LeoHammes1/espmanager/internal/device"
 	"github.com/LeoHammes1/espmanager/internal/driver"
+	"github.com/LeoHammes1/espmanager/internal/enroll"
 	"github.com/LeoHammes1/espmanager/internal/httpapi"
 	"github.com/LeoHammes1/espmanager/internal/mqttbroker"
 	"github.com/LeoHammes1/espmanager/internal/queue"
@@ -59,6 +60,7 @@ func run(log *slog.Logger) error {
 	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), driverSvc, hub, log)
 	signer := signclient.New(cfg.SignerURL, cfg.SignerToken, nil)
 	artifactSvc := artifact.NewService(sqlitestore.NewArtifactRepository(db), signer, driverSvc, cfg.ArtifactsDir)
+	enrollSvc := enroll.NewService(sqlitestore.NewEnrollRepository(db), deviceSvc, cfg.ClaimTTL)
 	jobs := queue.New(db, "builds", cfg.BuildTimeout)
 
 	if cfg.AdminPassword == "" {
@@ -71,7 +73,7 @@ func run(log *slog.Logger) error {
 		log.Warn("OTA rollouts disabled; set ESPM_PUBLIC_URL to the device-reachable base URL")
 	}
 
-	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc)
+	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc, enrollSvc)
 	if err != nil {
 		return err
 	}
@@ -97,6 +99,7 @@ func run(log *slog.Logger) error {
 		Drivers:       driverSvc,
 		Artifacts:     artifactSvc,
 		Deployer:      deploySvc,
+		Enroller:      enrollSvc,
 		Hub:           hub,
 		Templates:     tmpl,
 		Queue:         jobs,

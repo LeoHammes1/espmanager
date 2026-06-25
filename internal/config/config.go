@@ -18,6 +18,7 @@ type Config struct {
 	SignerToken   string
 	BuildTimeout  time.Duration
 	PublicURL     string
+	ClaimTTL      time.Duration
 }
 
 func Load() Config {
@@ -34,6 +35,7 @@ func Load() Config {
 		SignerToken:   env("ESPM_SIGNER_TOKEN", ""),
 		BuildTimeout:  envDuration("ESPM_BUILD_TIMEOUT", 30*time.Minute),
 		PublicURL:     env("ESPM_PUBLIC_URL", ""),
+		ClaimTTL:      envDuration("ESPM_CLAIM_TTL", 15*time.Minute),
 	}
 }
 

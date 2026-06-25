@@ -1,6 +1,7 @@
 package mqttbroker
 
 import (
+	"context"
 	"strings"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -15,15 +16,19 @@ type Presence interface {
 	Disconnected(id string)
 }
 
+type Authenticator interface {
+	Authenticate(ctx context.Context, deviceID, password string) bool
+}
+
 type Broker struct {
 	server  *mqtt.Server
 	nextSub int
 }
 
-func New(addr string, presence Presence) (*Broker, error) {
+func New(addr string, presence Presence, auth Authenticator) (*Broker, error) {
 	server := mqtt.New(&mqtt.Options{InlineClient: true})
 
-	if err := server.AddHook(&aclHook{}, nil); err != nil {
+	if err := server.AddHook(&aclHook{auth: auth}, nil); err != nil {
 		return nil, err
 	}
 	if err := server.AddHook(&presenceHook{presence: presence}, nil); err != nil {
@@ -53,6 +58,7 @@ func (b *Broker) Subscribe(filter string, handler func(topic string, payload []b
 
 type aclHook struct {
 	mqtt.HookBase
+	auth Authenticator
 }
 
 func (h *aclHook) ID() string { return "acl" }
@@ -67,7 +73,14 @@ func (h *aclHook) Provides(b byte) bool {
 }
 
 func (h *aclHook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
-	return true
+	if cl.ID == mqtt.InlineClientId {
+		return true
+	}
+	username := string(pk.Connect.Username)
+	if username == "" || username != cl.ID {
+		return false
+	}
+	return h.auth.Authenticate(context.Background(), username, string(pk.Connect.Password))
 }
 
 func (h *aclHook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {

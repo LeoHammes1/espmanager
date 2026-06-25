@@ -10,6 +10,9 @@
   {{template "nav"}}
   <main>
     <h1>Dispositivos</h1>
+    <form method="post" action="/devices/enroll" class="enroll-form">
+      <button type="submit">Adicionar dispositivo</button>
+    </form>
     <section id="devices">
       {{template "devices" .}}
     </section>

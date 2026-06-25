@@ -45,6 +45,13 @@ func (r *DeviceRepository) Get(ctx context.Context, id string) (device.Device, e
 	return scanDevice(row)
 }
 
+func (r *DeviceRepository) Ensure(ctx context.Context, id string, at time.Time) error {
+	_, err := r.db.ExecContext(ctx,
+		`insert into devices (id, enrolled_at) values (?, ?) on conflict(id) do nothing`,
+		id, at.UTC().Format(timeFormat))
+	return err
+}
+
 func (r *DeviceRepository) SetPresence(ctx context.Context, id string, online bool, at time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
 		insert into devices (id, online, last_seen_at) values (?, ?, ?)
