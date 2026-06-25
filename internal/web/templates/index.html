@@ -3,14 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESPManager</title>
+  <title>ESPManager — Dispositivos</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header>
-    <h1>ESPManager</h1>
-  </header>
+  {{template "nav"}}
   <main>
+    <h1>Dispositivos</h1>
     <section id="devices">
       {{template "devices" .}}
     </section>

@@ -14,6 +14,7 @@ import (
 
 	"github.com/LeoHammes1/espmanager/internal/config"
 	"github.com/LeoHammes1/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/driver"
 	"github.com/LeoHammes1/espmanager/internal/httpapi"
 	"github.com/LeoHammes1/espmanager/internal/mqttbroker"
 	"github.com/LeoHammes1/espmanager/internal/queue"
@@ -48,6 +49,7 @@ func run(log *slog.Logger) error {
 
 	hub := httpapi.NewSSEHub()
 	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), hub, log)
+	driverSvc := driver.NewService(sqlitestore.NewDriverRepository(db))
 	jobs := queue.New(db, "builds")
 
 	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc)
@@ -67,10 +69,11 @@ func run(log *slog.Logger) error {
 
 	router, err := httpapi.NewRouter(httpapi.Options{
 		Devices:     deviceSvc,
+		Drivers:     driverSvc,
 		Hub:         hub,
 		Templates:   tmpl,
 		Queue:       jobs,
-		Webhook:     webhook.NewHandler(cfg.WebhookSecret, jobs, log),
+		Webhook:     webhook.NewHandler(driverSvc, jobs, log),
 		WorkerToken: cfg.WorkerToken,
 	})
 	if err != nil {

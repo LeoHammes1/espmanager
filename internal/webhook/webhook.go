@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/LeoHammes1/espmanager/internal/driver"
 	"github.com/LeoHammes1/espmanager/internal/queue"
 )
 
@@ -19,14 +20,18 @@ type Enqueuer interface {
 	Enqueue(ctx context.Context, job queue.BuildJob) error
 }
 
+type DriverResolver interface {
+	ByRepo(ctx context.Context, repoURL string) ([]driver.Driver, error)
+}
+
 type Handler struct {
-	secret   string
+	drivers  DriverResolver
 	enqueuer Enqueuer
 	log      *slog.Logger
 }
 
-func NewHandler(secret string, enqueuer Enqueuer, log *slog.Logger) *Handler {
-	return &Handler{secret: secret, enqueuer: enqueuer, log: log}
+func NewHandler(drivers DriverResolver, enqueuer Enqueuer, log *slog.Logger) *Handler {
+	return &Handler{drivers: drivers, enqueuer: enqueuer, log: log}
 }
 
 type pushPayload struct {
@@ -44,37 +49,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.verify(r.Header.Get("X-Hub-Signature-256"), body) {
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
-		return
-	}
-
 	var p pushPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
 
-	if p.Ref != "refs/heads/main" {
-		w.WriteHeader(http.StatusAccepted)
+	candidates, err := h.drivers.ByRepo(r.Context(), p.Repository.CloneURL)
+	if err != nil {
+		h.log.Error("resolve drivers failed", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	job := queue.BuildJob{Repo: p.Repository.CloneURL, Commit: p.After}
-	if err := h.enqueuer.Enqueue(r.Context(), job); err != nil {
-		h.log.Error("enqueue failed", "err", err)
-		http.Error(w, "enqueue failed", http.StatusInternalServerError)
-		return
+	signature := r.Header.Get("X-Hub-Signature-256")
+	enqueued, rejected := 0, false
+
+	for _, d := range candidates {
+		if p.Ref != "refs/heads/"+d.Branch {
+			continue
+		}
+		if !verify(signature, body, d.WebhookSecret) {
+			rejected = true
+			continue
+		}
+		job := queue.BuildJob{DriverID: d.ID, Repo: d.RepoURL, Commit: p.After, Env: d.PioEnv}
+		if err := h.enqueuer.Enqueue(r.Context(), job); err != nil {
+			h.log.Error("enqueue failed", "driver", d.ID, "err", err)
+			http.Error(w, "enqueue failed", http.StatusInternalServerError)
+			return
+		}
+		enqueued++
 	}
 
+	if enqueued == 0 && rejected {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (h *Handler) verify(signature string, body []byte) bool {
-	if h.secret == "" {
+func verify(signature string, body []byte, secret string) bool {
+	if secret == "" {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(h.secret))
+	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expected))

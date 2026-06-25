@@ -1,0 +1,71 @@
+package httpapi
+
+import (
+	"errors"
+	"html/template"
+	"net/http"
+
+	"github.com/LeoHammes1/espmanager/internal/driver"
+)
+
+type driverView struct {
+	ID            string
+	Name          string
+	RepoURL       string
+	Branch        string
+	PioEnv        string
+	WebhookSecret string
+	CreatedAt     string
+}
+
+type driversData struct {
+	Drivers []driverView
+}
+
+func driversPage(drivers DriverService, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := drivers.List(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		data := driversData{Drivers: make([]driverView, 0, len(list))}
+		for _, d := range list {
+			data.Drivers = append(data.Drivers, driverView{
+				ID:            d.ID,
+				Name:          d.Name,
+				RepoURL:       d.RepoURL,
+				Branch:        d.Branch,
+				PioEnv:        d.PioEnv,
+				WebhookSecret: d.WebhookSecret,
+				CreatedAt:     d.CreatedAt.Format("2006-01-02 15:04"),
+			})
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.ExecuteTemplate(w, "drivers.html", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+func createDriver(drivers DriverService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, err := drivers.Create(r.Context(), driver.NewDriver{
+			Name:            r.FormValue("name"),
+			RepoURL:         r.FormValue("repo_url"),
+			Branch:          r.FormValue("branch"),
+			PioEnv:          r.FormValue("pio_env"),
+			PartitionScheme: r.FormValue("partition_scheme"),
+		})
+		switch {
+		case errors.Is(err, driver.ErrInvalid):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		default:
+			http.Redirect(w, r, "/drivers", http.StatusSeeOther)
+		}
+	}
+}

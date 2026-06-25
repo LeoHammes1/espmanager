@@ -7,7 +7,6 @@ services:
       - "8080:8080"
       - "1883:1883"
     environment:
-      ESPM_WEBHOOK_SECRET: ${ESPM_WEBHOOK_SECRET:-changeme}
       ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
     volumes:
       - core-data:/app/data

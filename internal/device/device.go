@@ -22,6 +22,7 @@ type Repository interface {
 	Get(ctx context.Context, id string) (Device, error)
 	SetPresence(ctx context.Context, id string, online bool, at time.Time) error
 	Touch(ctx context.Context, id string, at time.Time) error
+	Assign(ctx context.Context, id, driverID string) error
 }
 
 type Notifier interface {

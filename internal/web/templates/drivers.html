@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESPManager — Drivers</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  {{template "nav"}}
+  <main>
+    <h1>Drivers</h1>
+    <form method="post" action="/drivers" class="driver-form">
+      <input name="name" placeholder="Nome" required>
+      <input name="repo_url" placeholder="https://git.exemplo/repo.git" required>
+      <input name="branch" placeholder="main">
+      <input name="pio_env" placeholder="esp32dev">
+      <input name="partition_scheme" placeholder="partições (opcional)">
+      <button type="submit">Criar driver</button>
+    </form>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Repositório</th>
+          <th>Branch</th>
+          <th>Env</th>
+          <th>Webhook secret</th>
+          <th>Criado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Drivers}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{.RepoURL}}</td>
+          <td>{{.Branch}}</td>
+          <td>{{if .PioEnv}}{{.PioEnv}}{{else}}—{{end}}</td>
+          <td><code>{{.WebhookSecret}}</code></td>
+          <td>{{.CreatedAt}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="empty">Nenhum driver cadastrado.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>

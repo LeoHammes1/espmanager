@@ -18,3 +18,8 @@ Obrigatórias para todas as sessões e todos os agentes que trabalharem neste pr
 
 ### Documentação
 - Não criar documentos no repositório (ROADMAP, ARCHITECTURE, etc.) por enquanto. A documentação será escrita quando o projeto estiver pronto.
+
+### Processo
+- **Nunca desenvolver direto na `main`.** Todo trabalho acontece em uma branch (`feature/...`, `fix/...`).
+- **Antes de integrar na `main`, rodar um review de código** (workflow multi-agente, automático) e corrigir os achados; só então fazer merge. Não é necessário pedir permissão a cada vez.
+- Usar **workflows** para tarefas substanciais, visando qualidade e velocidade.

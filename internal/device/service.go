@@ -21,6 +21,14 @@ func (s *Service) List(ctx context.Context) ([]Device, error) {
 	return s.repo.List(ctx)
 }
 
+func (s *Service) Assign(ctx context.Context, id, driverID string) error {
+	if err := s.repo.Assign(ctx, id, driverID); err != nil {
+		return err
+	}
+	s.notifier.DeviceChanged()
+	return nil
+}
+
 func (s *Service) Connected(id string) {
 	s.apply(id, s.repo.SetPresence(context.Background(), id, true, s.now()))
 }

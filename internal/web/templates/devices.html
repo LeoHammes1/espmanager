@@ -1,5 +1,5 @@
 {{define "devices"}}
-<table class="devices">
+<table class="grid">
   <thead>
     <tr>
       <th>Dispositivo</th>
@@ -7,6 +7,7 @@
       <th>Status</th>
       <th>Visto por último</th>
       <th>Versão</th>
+      <th>Driver</th>
     </tr>
   </thead>
   <tbody>
@@ -17,9 +18,21 @@
       <td><span class="status {{if .Online}}online{{else}}offline{{end}}">{{if .Online}}online{{else}}offline{{end}}</span></td>
       <td>{{.LastSeen}}</td>
       <td>{{if .Version}}{{.Version}}{{else}}—{{end}}</td>
+      <td>
+        <form method="post" action="/devices/{{.ID}}/driver" class="assign">
+          {{$current := .DriverID}}
+          <select name="driver_id">
+            <option value="">—</option>
+            {{range $.Drivers}}
+            <option value="{{.ID}}" {{if eq .ID $current}}selected{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+          <button type="submit">Salvar</button>
+        </form>
+      </td>
     </tr>
     {{else}}
-    <tr><td colspan="5" class="empty">Nenhum dispositivo registrado ainda.</td></tr>
+    <tr><td colspan="6" class="empty">Nenhum dispositivo registrado ainda.</td></tr>
     {{end}}
   </tbody>
 </table>
