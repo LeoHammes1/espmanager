@@ -18,8 +18,8 @@ constexpr uint32_t otaIdleTimeoutMs = 15000;
 }
 
 EspManagerClient::EspManagerClient(const EspManagerConfig &cfg)
-	: cfg_(cfg), mqtt_(net_), lastHeartbeat_(0), lastReconnectAttempt_(0),
-	  lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
+	: cfg_(cfg), otaPending_(false), mqtt_(net_), lastHeartbeat_(0),
+	  lastReconnectAttempt_(0), lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
 
 void EspManagerClient::begin() {
 	WiFi.mode(WIFI_STA);
@@ -69,6 +69,14 @@ void EspManagerClient::loop() {
 	}
 
 	mqtt_.loop();
+	flushPendingStatus();
+
+	if (otaPending_) {
+		otaPending_ = false;
+		applyOTA();
+		return;
+	}
+
 	if (now - lastHeartbeat_ >= cfg_.heartbeatIntervalMs) {
 		publishHeartbeat();
 	}
@@ -166,12 +174,23 @@ void EspManagerClient::confirmOTA() {
 	if (otaTarget_.length() == 0) {
 		return;
 	}
-	reportOTA(otaTarget_ == cfg_.firmwareVersion ? "ok" : "failed");
+	pendingStatus_ = otaTarget_ == cfg_.firmwareVersion ? "ok" : "failed";
+}
 
-	prefs_.begin(prefsNamespace, false);
-	prefs_.remove(prefsOtaTargetKey);
-	prefs_.end();
-	otaTarget_ = "";
+void EspManagerClient::flushPendingStatus() {
+	if (pendingStatus_.length() == 0) {
+		return;
+	}
+	if (!reportOTA(pendingStatus_.c_str())) {
+		return;
+	}
+	pendingStatus_ = "";
+	if (otaTarget_.length() > 0) {
+		prefs_.begin(prefsNamespace, false);
+		prefs_.remove(prefsOtaTargetKey);
+		prefs_.end();
+		otaTarget_ = "";
+	}
 }
 
 void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned int length) {
@@ -189,37 +208,43 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 	if (version.length() == 0 || url.length() == 0 || version == cfg_.firmwareVersion) {
 		return;
 	}
-	applyOTA(version, url, cmd["sha256"].as<String>(), cmd["signature"].as<String>());
+
+	otaVersion_ = version;
+	otaURL_ = url;
+	otaSha_ = cmd["sha256"].as<String>();
+	otaSig_ = cmd["signature"].as<String>();
+	otaPending_ = true;
 }
 
-void EspManagerClient::applyOTA(const String &targetVersion, const String &url, const String &sha256Hex, const String &signatureHex) {
+void EspManagerClient::applyOTA() {
 	uint8_t expectedSha[32];
 	uint8_t signature[64];
 	uint8_t publicKey[32];
-	if (!hexToBytes(sha256Hex, expectedSha, sizeof(expectedSha)) ||
-		!hexToBytes(signatureHex, signature, sizeof(signature)) ||
-		!hexToBytes(String(cfg_.signingPublicKeyHex), publicKey, sizeof(publicKey))) {
-		reportOTA("failed");
+	if (!hexToBytes(otaSha_, expectedSha, sizeof(expectedSha)) ||
+		!hexToBytes(otaSig_, signature, sizeof(signature)) ||
+		!hexToBytes(String(cfg_.signingPublicKeyHex), publicKey, sizeof(publicKey)) ||
+		isAllZero(publicKey, sizeof(publicKey))) {
+		pendingStatus_ = "failed";
 		return;
 	}
 
 	reportOTA("updating");
 
 	HTTPClient http;
-	if (!http.begin(net_, url)) {
-		reportOTA("failed");
+	if (!http.begin(net_, otaURL_)) {
+		pendingStatus_ = "failed";
 		return;
 	}
 	if (http.GET() != HTTP_CODE_OK) {
 		http.end();
-		reportOTA("failed");
+		pendingStatus_ = "failed";
 		return;
 	}
 
 	int contentLen = http.getSize();
 	if (!Update.begin(contentLen > 0 ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN)) {
 		http.end();
-		reportOTA("failed");
+		pendingStatus_ = "failed";
 		return;
 	}
 
@@ -229,19 +254,19 @@ void EspManagerClient::applyOTA(const String &targetVersion, const String &url, 
 	uint8_t buf[1024];
 	size_t total = 0;
 	bool ok = true;
-	uint32_t idleDeadline = millis() + otaIdleTimeoutMs;
+	uint32_t lastProgress = millis();
 
 	while (http.connected() && (contentLen < 0 || total < (size_t)contentLen)) {
 		size_t avail = stream->available();
 		if (avail == 0) {
-			if (millis() > idleDeadline) {
+			if (millis() - lastProgress > otaIdleTimeoutMs) {
 				ok = false;
 				break;
 			}
 			delay(1);
 			continue;
 		}
-		idleDeadline = millis() + otaIdleTimeoutMs;
+		lastProgress = millis();
 		int n = stream->readBytes(buf, avail < sizeof(buf) ? avail : sizeof(buf));
 		if (n <= 0) {
 			continue;
@@ -257,7 +282,7 @@ void EspManagerClient::applyOTA(const String &targetVersion, const String &url, 
 
 	if (!ok || (contentLen > 0 && total != (size_t)contentLen)) {
 		Update.abort();
-		reportOTA("failed");
+		pendingStatus_ = "failed";
 		return;
 	}
 
@@ -266,29 +291,32 @@ void EspManagerClient::applyOTA(const String &targetVersion, const String &url, 
 	if (memcmp(digest, expectedSha, sizeof(digest)) != 0 ||
 		!Ed25519::verify(signature, publicKey, digest, sizeof(digest))) {
 		Update.abort();
-		reportOTA("failed");
+		pendingStatus_ = "failed";
 		return;
 	}
 
 	if (!Update.end(true)) {
-		reportOTA("failed");
+		pendingStatus_ = "failed";
 		return;
 	}
 
 	prefs_.begin(prefsNamespace, false);
-	prefs_.putString(prefsOtaTargetKey, targetVersion);
+	size_t written = prefs_.putString(prefsOtaTargetKey, otaVersion_);
 	prefs_.end();
+	if (written != otaVersion_.length()) {
+		reportOTA("ok");
+	}
 
 	delay(200);
 	ESP.restart();
 }
 
-void EspManagerClient::reportOTA(const char *status) {
+bool EspManagerClient::reportOTA(const char *status) {
 	JsonDocument doc;
 	doc["status"] = status;
 	String out;
 	serializeJson(doc, out);
-	mqtt_.publish(topic("ota/status").c_str(), out.c_str());
+	return mqtt_.publish(topic("ota/status").c_str(), out.c_str());
 }
 
 String EspManagerClient::topic(const char *suffix) const {
@@ -312,6 +340,15 @@ bool EspManagerClient::hexToBytes(const String &hex, uint8_t *out, size_t outLen
 			return false;
 		}
 		out[i] = (uint8_t)((hi << 4) | lo);
+	}
+	return true;
+}
+
+bool EspManagerClient::isAllZero(const uint8_t *data, size_t len) {
+	for (size_t i = 0; i < len; i++) {
+		if (data[i] != 0) {
+			return false;
+		}
 	}
 	return true;
 }

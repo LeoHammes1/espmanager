@@ -33,17 +33,27 @@ private:
 	bool connectMQTT();
 	void publishHeartbeat();
 	void onMessage(const char *topic, const uint8_t *payload, unsigned int length);
-	void applyOTA(const String &targetVersion, const String &url, const String &sha256Hex, const String &signatureHex);
+	void applyOTA();
 	void confirmOTA();
-	void reportOTA(const char *status);
+	void flushPendingStatus();
+	bool reportOTA(const char *status);
 
 	String topic(const char *suffix) const;
 	static bool hexToBytes(const String &hex, uint8_t *out, size_t outLen);
+	static bool isAllZero(const uint8_t *data, size_t len);
 
 	EspManagerConfig cfg_;
 	String deviceID_;
 	String password_;
 	String otaTarget_;
+	String pendingStatus_;
+
+	bool otaPending_;
+	String otaVersion_;
+	String otaURL_;
+	String otaSha_;
+	String otaSig_;
+
 	WiFiClient net_;
 	PubSubClient mqtt_;
 	Preferences prefs_;
