@@ -20,15 +20,15 @@ class EspManagerClient {
 public:
 	explicit EspManagerClient(const EspManagerConfig &cfg);
 
-	bool begin();
+	void begin();
 	void loop();
 
 	const String &deviceID() const { return deviceID_; }
 
 private:
-	bool connectWiFi();
-	bool ensureCredentials();
+	String computeDeviceID() const;
 	bool claimCredentials();
+	bool persistPassword(const String &password);
 	bool connectMQTT();
 	void publishHeartbeat();
 	void onMessage(const char *topic, const uint8_t *payload, unsigned int length);
@@ -43,4 +43,6 @@ private:
 	Preferences prefs_;
 	uint32_t lastHeartbeat_;
 	uint32_t lastReconnectAttempt_;
+	uint32_t lastClaimAttempt_;
+	uint32_t lastWiFiAttempt_;
 };

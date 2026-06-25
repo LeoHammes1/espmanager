@@ -4,8 +4,6 @@ import "strings"
 
 const Root = "espmanager"
 
-func Availability(deviceID string) string { return Root + "/" + deviceID + "/availability" }
-
 func State(deviceID string) string { return Root + "/" + deviceID + "/state" }
 
 func CmdOTA(deviceID string) string { return Root + "/" + deviceID + "/cmd/ota" }

@@ -8,24 +8,21 @@ namespace {
 constexpr char prefsNamespace[] = "espm";
 constexpr char prefsPasswordKey[] = "mqttpass";
 constexpr uint32_t reconnectIntervalMs = 5000;
+constexpr uint32_t claimRetryIntervalMs = 15000;
+constexpr uint32_t wifiRetryIntervalMs = 30000;
 }
 
 EspManagerClient::EspManagerClient(const EspManagerConfig &cfg)
-	: cfg_(cfg), mqtt_(net_), lastHeartbeat_(0), lastReconnectAttempt_(0) {}
+	: cfg_(cfg), mqtt_(net_), lastHeartbeat_(0), lastReconnectAttempt_(0),
+	  lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
 
-bool EspManagerClient::begin() {
-	uint8_t mac[6];
-	WiFi.macAddress(mac);
-	char buf[13];
-	snprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-	deviceID_ = buf;
+void EspManagerClient::begin() {
+	WiFi.mode(WIFI_STA);
+	deviceID_ = computeDeviceID();
 
-	if (!connectWiFi()) {
-		return false;
-	}
-	if (!ensureCredentials()) {
-		return false;
-	}
+	prefs_.begin(prefsNamespace, true);
+	password_ = prefs_.getString(prefsPasswordKey, "");
+	prefs_.end();
 
 	mqtt_.setServer(cfg_.host, cfg_.mqttPort);
 	mqtt_.setBufferSize(1024);
@@ -33,17 +30,31 @@ bool EspManagerClient::begin() {
 		onMessage(topic, payload, length);
 	});
 
-	return connectMQTT();
+	WiFi.setAutoReconnect(true);
+	WiFi.begin(cfg_.wifiSSID, cfg_.wifiPassword);
+	lastWiFiAttempt_ = millis();
 }
 
 void EspManagerClient::loop() {
+	uint32_t now = millis();
+
 	if (WiFi.status() != WL_CONNECTED) {
-		connectWiFi();
+		if (now - lastWiFiAttempt_ >= wifiRetryIntervalMs) {
+			lastWiFiAttempt_ = now;
+			WiFi.begin(cfg_.wifiSSID, cfg_.wifiPassword);
+		}
+		return;
+	}
+
+	if (password_.length() == 0) {
+		if (now - lastClaimAttempt_ >= claimRetryIntervalMs) {
+			lastClaimAttempt_ = now;
+			claimCredentials();
+		}
 		return;
 	}
 
 	if (!mqtt_.connected()) {
-		uint32_t now = millis();
 		if (now - lastReconnectAttempt_ >= reconnectIntervalMs) {
 			lastReconnectAttempt_ = now;
 			connectMQTT();
@@ -52,38 +63,17 @@ void EspManagerClient::loop() {
 	}
 
 	mqtt_.loop();
-
-	uint32_t now = millis();
 	if (now - lastHeartbeat_ >= cfg_.heartbeatIntervalMs) {
-		lastHeartbeat_ = now;
 		publishHeartbeat();
 	}
 }
 
-bool EspManagerClient::connectWiFi() {
-	if (WiFi.status() == WL_CONNECTED) {
-		return true;
-	}
-
-	WiFi.mode(WIFI_STA);
-	WiFi.begin(cfg_.wifiSSID, cfg_.wifiPassword);
-
-	uint32_t deadline = millis() + 20000;
-	while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
-		delay(250);
-	}
-	return WiFi.status() == WL_CONNECTED;
-}
-
-bool EspManagerClient::ensureCredentials() {
-	prefs_.begin(prefsNamespace, false);
-	password_ = prefs_.getString(prefsPasswordKey, "");
-	prefs_.end();
-
-	if (password_.length() > 0) {
-		return true;
-	}
-	return claimCredentials();
+String EspManagerClient::computeDeviceID() const {
+	uint8_t mac[6];
+	WiFi.macAddress(mac);
+	char buf[13];
+	snprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	return String(buf);
 }
 
 bool EspManagerClient::claimCredentials() {
@@ -117,15 +107,21 @@ bool EspManagerClient::claimCredentials() {
 		return false;
 	}
 
-	password_ = res["password"].as<String>();
-	if (password_.length() == 0) {
+	String password = res["password"].as<String>();
+	if (password.length() == 0 || !persistPassword(password)) {
 		return false;
 	}
-
-	prefs_.begin(prefsNamespace, false);
-	prefs_.putString(prefsPasswordKey, password_);
-	prefs_.end();
+	password_ = password;
 	return true;
+}
+
+bool EspManagerClient::persistPassword(const String &password) {
+	if (!prefs_.begin(prefsNamespace, false)) {
+		return false;
+	}
+	size_t written = prefs_.putString(prefsPasswordKey, password);
+	prefs_.end();
+	return written == password.length();
 }
 
 bool EspManagerClient::connectMQTT() {
@@ -156,6 +152,7 @@ void EspManagerClient::publishHeartbeat() {
 	String payload;
 	serializeJson(doc, payload);
 	mqtt_.publish(topic("state").c_str(), payload.c_str());
+	lastHeartbeat_ = millis();
 }
 
 void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned int length) {
@@ -169,7 +166,7 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 	}
 
 	JsonDocument status;
-	status["status"] = "received";
+	status["status"] = "updating";
 	status["version"] = cmd["version"];
 	String out;
 	serializeJson(status, out);
