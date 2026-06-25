@@ -32,20 +32,15 @@ func (r *DeployRepository) AddTarget(ctx context.Context, t deploy.Target) error
 	return err
 }
 
-func (r *DeployRepository) SetTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `
-		update deploy_targets set status = ?, updated_at = ?
-		where deploy_id = ? and device_id = ?`,
-		string(status), at.UTC().Format(timeFormat), deployID, deviceID)
-	return err
-}
-
-func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `
+func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
 		update deploy_targets set status = ?, updated_at = ?
 		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed', 'lost')`,
 		string(status), at.UTC().Format(timeFormat), deployID, deviceID)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *DeployRepository) LatestTargetForDevice(ctx context.Context, deviceID string) (deploy.Target, bool, error) {

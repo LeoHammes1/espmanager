@@ -30,27 +30,19 @@ func (r *fakeRepo) AddTarget(_ context.Context, t Target) error {
 	return nil
 }
 
-func (r *fakeRepo) set(deviceID string, status Status, at time.Time, guard bool) error {
+func (r *fakeRepo) AdvanceTargetStatus(_ context.Context, _, deviceID string, status Status, at time.Time) (int64, error) {
 	for i := range r.targets {
 		if r.targets[i].DeviceID != deviceID {
 			continue
 		}
-		if guard && terminal(r.targets[i].Status) {
-			return nil
+		if terminal(r.targets[i].Status) {
+			return 0, nil
 		}
 		r.targets[i].Status = status
 		r.targets[i].UpdatedAt = at
-		return nil
+		return 1, nil
 	}
-	return nil
-}
-
-func (r *fakeRepo) SetTargetStatus(_ context.Context, _, deviceID string, status Status, at time.Time) error {
-	return r.set(deviceID, status, at, false)
-}
-
-func (r *fakeRepo) AdvanceTargetStatus(_ context.Context, _, deviceID string, status Status, at time.Time) error {
-	return r.set(deviceID, status, at, true)
+	return 0, nil
 }
 
 func (r *fakeRepo) LatestTargetForDevice(_ context.Context, deviceID string) (Target, bool, error) {

@@ -37,6 +37,14 @@ func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource,
 	if opts.CanaryPercent <= 0 || opts.CanaryPercent > 100 {
 		opts.CanaryPercent = 100
 	}
+	if opts.FailureThreshold < 0 {
+		opts.FailureThreshold = 0
+	} else if opts.FailureThreshold > 100 {
+		opts.FailureThreshold = 100
+	}
+	if opts.TargetTimeout <= 0 {
+		opts.TargetTimeout = 5 * time.Minute
+	}
 	return &Service{
 		repo:      repo,
 		devices:   devices,
@@ -91,6 +99,7 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 	}
 
 	var errs []error
+	var canary []string
 	for i, deviceID := range deviceIDs {
 		batch := 0
 		if i >= canaryCount {
@@ -99,6 +108,10 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 		t := Target{DeployID: d.ID, DeviceID: deviceID, Version: version, Batch: batch, Status: StatusPending, UpdatedAt: s.now().UTC()}
 		if err := s.repo.AddTarget(ctx, t); err != nil {
 			errs = append(errs, fmt.Errorf("add target %s: %w", deviceID, err))
+			continue
+		}
+		if batch == 0 {
+			canary = append(canary, deviceID)
 		}
 	}
 
@@ -106,7 +119,7 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	for _, deviceID := range deviceIDs[:canaryCount] {
+	for _, deviceID := range canary {
 		errs = append(errs, s.trigger(ctx, d.ID, deviceID, cmd))
 	}
 	return errors.Join(errs...)
@@ -134,11 +147,14 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 	for i := range targets {
 		t := &targets[i]
 		if t.Status == StatusTriggered && now.Sub(t.UpdatedAt) > s.opts.TargetTimeout {
-			if err := s.repo.AdvanceTargetStatus(ctx, d.ID, t.DeviceID, StatusLost, now); err != nil {
+			n, err := s.repo.AdvanceTargetStatus(ctx, d.ID, t.DeviceID, StatusLost, now)
+			if err != nil {
 				s.log.Error("mark lost failed", "deploy", d.ID, "device", t.DeviceID, "err", err)
 				continue
 			}
-			t.Status = StatusLost
+			if n > 0 {
+				t.Status = StatusLost
+			}
 		}
 	}
 
@@ -146,7 +162,7 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 		group := filterBatch(targets, batch)
 		if allTerminal(group) {
 			if failureExceeded(group, s.opts.FailureThreshold) {
-				s.setState(d.ID, StatePaused)
+				s.setState(ctx, d.ID, StatePaused)
 				return
 			}
 			continue
@@ -157,7 +173,7 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 		}
 		return
 	}
-	s.setState(d.ID, StateCompleted)
+	s.setState(ctx, d.ID, StateCompleted)
 }
 
 func (s *Service) promote(ctx context.Context, d Deploy, pending []Target) {
@@ -178,17 +194,17 @@ func (s *Service) promote(ctx context.Context, d Deploy, pending []Target) {
 
 func (s *Service) trigger(ctx context.Context, deployID, deviceID string, cmd []byte) error {
 	if err := s.publisher.Publish(topics.CmdOTA(deviceID), cmd); err != nil {
-		_ = s.repo.SetTargetStatus(ctx, deployID, deviceID, StatusFailed, s.now().UTC())
+		_, _ = s.repo.AdvanceTargetStatus(ctx, deployID, deviceID, StatusFailed, s.now().UTC())
 		return fmt.Errorf("publish %s: %w", deviceID, err)
 	}
-	if err := s.repo.SetTargetStatus(ctx, deployID, deviceID, StatusTriggered, s.now().UTC()); err != nil {
+	if _, err := s.repo.AdvanceTargetStatus(ctx, deployID, deviceID, StatusTriggered, s.now().UTC()); err != nil {
 		return fmt.Errorf("trigger %s: %w", deviceID, err)
 	}
 	return nil
 }
 
-func (s *Service) setState(deployID string, state State) {
-	if err := s.repo.SetDeployState(context.Background(), deployID, state); err != nil {
+func (s *Service) setState(ctx context.Context, deployID string, state State) {
+	if err := s.repo.SetDeployState(ctx, deployID, state); err != nil {
 		s.log.Error("set deploy state failed", "deploy", deployID, "state", state, "err", err)
 	}
 }
@@ -226,7 +242,7 @@ func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte)
 		return
 	}
 
-	if err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, s.now().UTC()); err != nil {
+	if _, err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, s.now().UTC()); err != nil {
 		s.log.Error("advance deploy target failed", "device", deviceID, "err", err)
 	}
 }

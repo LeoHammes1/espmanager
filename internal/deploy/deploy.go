@@ -45,8 +45,7 @@ type Target struct {
 type Repository interface {
 	CreateDeploy(ctx context.Context, d Deploy) error
 	AddTarget(ctx context.Context, t Target) error
-	SetTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
-	AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
+	AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) (int64, error)
 	LatestTargetForDevice(ctx context.Context, deviceID string) (Target, bool, error)
 	ListActiveDeploys(ctx context.Context) ([]Deploy, error)
 	TargetsForDeploy(ctx context.Context, deployID string) ([]Target, error)
