@@ -5,3 +5,5 @@
 *.db-shm
 *.key
 .env
+secrets.h
+.pio/

@@ -1,0 +1,12 @@
+{
+  "name": "espmanager-client",
+  "version": "0.1.0",
+  "description": "ESPManager device client for ESP32: enrollment, MQTT presence and heartbeat",
+  "keywords": "espmanager, ota, mqtt, esp32",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": [
+    { "owner": "knolleary", "name": "PubSubClient", "version": "^2.8" },
+    { "owner": "bblanchon", "name": "ArduinoJson", "version": "^7.0" }
+  ]
+}
