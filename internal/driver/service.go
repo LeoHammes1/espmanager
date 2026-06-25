@@ -2,12 +2,12 @@ package driver
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/LeoHammes1/espmanager/internal/id"
 )
 
 var (
@@ -48,12 +48,12 @@ func (s *Service) Create(ctx context.Context, in NewDriver) (Driver, error) {
 	}
 
 	d := Driver{
-		ID:            token(8),
+		ID:            id.New(8),
 		Name:          name,
 		RepoURL:       repoURL,
 		Branch:        branch,
 		PioEnv:        strings.TrimSpace(in.PioEnv),
-		WebhookSecret: token(32),
+		WebhookSecret: id.New(32),
 		CreatedAt:     s.now().UTC(),
 	}
 	if err := s.repo.Create(ctx, d); err != nil {
@@ -88,10 +88,4 @@ func isHTTPURL(raw string) bool {
 		return false
 	}
 	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
-}
-
-func token(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

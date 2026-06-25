@@ -4,6 +4,7 @@ import (
 	"context"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -39,6 +40,7 @@ type Options struct {
 	Templates     *template.Template
 	Queue         *queue.Queue
 	Webhook       http.Handler
+	Log           *slog.Logger
 	WorkerToken   string
 	AdminUser     string
 	AdminPassword string
@@ -64,7 +66,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 		wr.Use(httpx.BearerAuth(opts.WorkerToken))
 		wr.Get("/v1/jobs/next", nextJob(opts.Queue))
 		wr.Post("/v1/jobs/{id}/complete", completeJob(opts.Queue))
-		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts, opts.Deployer))
+		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts, opts.Deployer, opts.Log))
 	})
 
 	r.Group(func(ur chi.Router) {

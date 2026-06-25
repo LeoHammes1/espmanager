@@ -1,10 +1,13 @@
 package mqttbroker
 
 import (
+	"strings"
+
 	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
+
+	"github.com/LeoHammes1/espmanager/internal/topics"
 )
 
 type Presence interface {
@@ -20,7 +23,7 @@ type Broker struct {
 func New(addr string, presence Presence) (*Broker, error) {
 	server := mqtt.New(&mqtt.Options{InlineClient: true})
 
-	if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
+	if err := server.AddHook(&aclHook{}, nil); err != nil {
 		return nil, err
 	}
 	if err := server.AddHook(&presenceHook{presence: presence}, nil); err != nil {
@@ -46,6 +49,32 @@ func (b *Broker) Subscribe(filter string, handler func(topic string, payload []b
 	return b.server.Subscribe(filter, b.nextSub, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
 		handler(pk.TopicName, pk.Payload)
 	})
+}
+
+type aclHook struct {
+	mqtt.HookBase
+}
+
+func (h *aclHook) ID() string { return "acl" }
+
+func (h *aclHook) Provides(b byte) bool {
+	switch b {
+	case mqtt.OnConnectAuthenticate, mqtt.OnACLCheck:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *aclHook) OnConnectAuthenticate(cl *mqtt.Client, pk packets.Packet) bool {
+	return true
+}
+
+func (h *aclHook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
+	if cl.ID == mqtt.InlineClientId {
+		return true
+	}
+	return strings.HasPrefix(topic, topics.Root+"/"+cl.ID+"/")
 }
 
 type presenceHook struct {

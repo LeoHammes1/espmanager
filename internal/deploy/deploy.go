@@ -35,6 +35,7 @@ type Repository interface {
 	CreateDeploy(ctx context.Context, d Deploy) error
 	AddTarget(ctx context.Context, t Target) error
 	SetTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
+	AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
 	LatestTargetForDevice(ctx context.Context, deviceID string) (Target, bool, error)
 }
 

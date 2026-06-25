@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -62,6 +64,12 @@ func run(log *slog.Logger) error {
 	if cfg.AdminPassword == "" {
 		log.Warn("management UI is unauthenticated; set ESPM_ADMIN_PASSWORD to require login")
 	}
+	if err := validatePublicURL(cfg.PublicURL); err != nil {
+		return err
+	}
+	if cfg.PublicURL == "" {
+		log.Warn("OTA rollouts disabled; set ESPM_PUBLIC_URL to the device-reachable base URL")
+	}
 
 	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc)
 	if err != nil {
@@ -93,6 +101,7 @@ func run(log *slog.Logger) error {
 		Templates:     tmpl,
 		Queue:         jobs,
 		Webhook:       webhook.NewHandler(driverSvc, jobs, log),
+		Log:           log,
 		WorkerToken:   cfg.WorkerToken,
 		AdminUser:     cfg.AdminUser,
 		AdminPassword: cfg.AdminPassword,
@@ -132,9 +141,7 @@ func subscribeTelemetry(broker *mqttbroker.Broker, devices *device.Service, depl
 		if !ok {
 			return
 		}
-		version := parseVersion(payload)
-		devices.Heartbeat(id, version)
-		deploys.OnHeartbeat(context.Background(), id, version)
+		devices.Heartbeat(id, parseVersion(payload))
 	}); err != nil {
 		return err
 	}
@@ -146,6 +153,17 @@ func subscribeTelemetry(broker *mqttbroker.Broker, devices *device.Service, depl
 		}
 		deploys.OnStatus(context.Background(), id, payload)
 	})
+}
+
+func validatePublicURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("invalid ESPM_PUBLIC_URL %q: must be an absolute http(s) URL", raw)
+	}
+	return nil
 }
 
 func parseVersion(payload []byte) string {

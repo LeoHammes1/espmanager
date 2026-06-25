@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/LeoHammes1/espmanager/internal/deploy"
@@ -39,15 +40,24 @@ func (r *DeployRepository) SetTargetStatus(ctx context.Context, deployID, device
 	return err
 }
 
+func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		update deploy_targets set status = ?, updated_at = ?
+		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed')`,
+		string(status), at.UTC().Format(timeFormat), deployID, deviceID)
+	return err
+}
+
 func (r *DeployRepository) LatestTargetForDevice(ctx context.Context, deviceID string) (deploy.Target, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-		select deploy_id, device_id, version, status, updated_at
-		from deploy_targets where device_id = ? order by updated_at desc limit 1`, deviceID)
+		select t.deploy_id, t.device_id, t.version, t.status, t.updated_at
+		from deploy_targets t join deploys d on d.id = t.deploy_id
+		where t.device_id = ? order by d.created_at desc, t.updated_at desc limit 1`, deviceID)
 
 	var t deploy.Target
 	var status, updatedAt string
 	err := row.Scan(&t.DeployID, &t.DeviceID, &t.Version, &status, &updatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return deploy.Target{}, false, nil
 	}
 	if err != nil {

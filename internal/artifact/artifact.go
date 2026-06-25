@@ -16,6 +16,10 @@ type Artifact struct {
 	CreatedAt time.Time
 }
 
+func FirmwarePath(driverID, version string) string {
+	return "/firmware/" + driverID + "/" + version + ".bin"
+}
+
 type Repository interface {
 	Create(ctx context.Context, a Artifact) error
 	Get(ctx context.Context, driverID, version string) (Artifact, error)
