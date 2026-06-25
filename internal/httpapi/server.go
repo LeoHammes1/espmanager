@@ -10,10 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/leohammes/espmanager/internal/device"
-	"github.com/leohammes/espmanager/internal/httpx"
-	"github.com/leohammes/espmanager/internal/queue"
-	"github.com/leohammes/espmanager/internal/web"
+	"github.com/LeoHammes1/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/httpx"
+	"github.com/LeoHammes1/espmanager/internal/queue"
+	"github.com/LeoHammes1/espmanager/internal/web"
 )
 
 type DeviceLister interface {

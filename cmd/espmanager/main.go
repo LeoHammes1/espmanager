@@ -12,14 +12,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/leohammes/espmanager/internal/config"
-	"github.com/leohammes/espmanager/internal/device"
-	"github.com/leohammes/espmanager/internal/httpapi"
-	"github.com/leohammes/espmanager/internal/mqttbroker"
-	"github.com/leohammes/espmanager/internal/queue"
-	sqlitestore "github.com/leohammes/espmanager/internal/store/sqlite"
-	"github.com/leohammes/espmanager/internal/web"
-	"github.com/leohammes/espmanager/internal/webhook"
+	"github.com/LeoHammes1/espmanager/internal/config"
+	"github.com/LeoHammes1/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/httpapi"
+	"github.com/LeoHammes1/espmanager/internal/mqttbroker"
+	"github.com/LeoHammes1/espmanager/internal/queue"
+	sqlitestore "github.com/LeoHammes1/espmanager/internal/store/sqlite"
+	"github.com/LeoHammes1/espmanager/internal/web"
+	"github.com/LeoHammes1/espmanager/internal/webhook"
 )
 
 func main() {

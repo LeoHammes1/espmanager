@@ -1,4 +1,4 @@
-module github.com/leohammes/espmanager
+module github.com/LeoHammes1/espmanager
 
 go 1.26.2
 

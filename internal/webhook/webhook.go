@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/leohammes/espmanager/internal/queue"
+	"github.com/LeoHammes1/espmanager/internal/queue"
 )
 
 const maxBodySize = 1 << 20

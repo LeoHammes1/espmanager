@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/leohammes/espmanager/internal/httpx"
-	"github.com/leohammes/espmanager/internal/sign"
+	"github.com/LeoHammes1/espmanager/internal/httpx"
+	"github.com/LeoHammes1/espmanager/internal/sign"
 )
 
 func main() {

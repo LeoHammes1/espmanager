@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/leohammes/espmanager/internal/build"
+	"github.com/LeoHammes1/espmanager/internal/build"
 )
 
 func main() {

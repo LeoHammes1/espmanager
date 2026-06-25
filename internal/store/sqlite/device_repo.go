@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/leohammes/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/device"
 )
 
 const timeFormat = "2006-01-02T15:04:05.000Z07:00"
