@@ -55,6 +55,7 @@ private:
 	String otaSig_;
 	uint64_t otaSeq_;
 	uint64_t otaFloor_;
+	uint64_t otaPendSeq_;
 
 	WiFiClient net_;
 	PubSubClient mqtt_;

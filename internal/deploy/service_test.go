@@ -114,7 +114,7 @@ func (f fakeArtifacts) Get(_ context.Context, _, _ string) (artifact.Artifact, e
 }
 
 func newService(repo Repository, pub Publisher, devices DeviceSource, baseURL string, opts Options) *Service {
-	art := fakeArtifacts{a: artifact.Artifact{SHA256: "abc", Signature: "sig"}}
+	art := fakeArtifacts{a: artifact.Artifact{SHA256: "abc", Signature: "sig", Sequence: 1}}
 	return NewService(repo, devices, art, pub, baseURL, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 

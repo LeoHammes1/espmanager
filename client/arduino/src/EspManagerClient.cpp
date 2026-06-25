@@ -12,6 +12,7 @@ constexpr char prefsNamespace[] = "espm";
 constexpr char prefsPasswordKey[] = "mqttpass";
 constexpr char prefsOtaTargetKey[] = "otatarget";
 constexpr char prefsOtaSeqKey[] = "otaseq";
+constexpr char prefsOtaPendSeqKey[] = "otapendseq";
 constexpr uint32_t reconnectIntervalMs = 5000;
 constexpr uint32_t claimRetryIntervalMs = 15000;
 constexpr uint32_t wifiRetryIntervalMs = 30000;
@@ -19,7 +20,7 @@ constexpr uint32_t otaIdleTimeoutMs = 15000;
 }
 
 EspManagerClient::EspManagerClient(const EspManagerConfig &cfg)
-	: cfg_(cfg), otaPending_(false), otaSeq_(0), otaFloor_(0), mqtt_(net_),
+	: cfg_(cfg), otaPending_(false), otaSeq_(0), otaFloor_(0), otaPendSeq_(0), mqtt_(net_),
 	  lastHeartbeat_(0), lastReconnectAttempt_(0), lastClaimAttempt_(0), lastWiFiAttempt_(0) {}
 
 void EspManagerClient::begin() {
@@ -30,6 +31,7 @@ void EspManagerClient::begin() {
 	password_ = prefs_.getString(prefsPasswordKey, "");
 	otaTarget_ = prefs_.getString(prefsOtaTargetKey, "");
 	otaFloor_ = prefs_.getULong64(prefsOtaSeqKey, 0);
+	otaPendSeq_ = prefs_.getULong64(prefsOtaPendSeqKey, 0);
 	prefs_.end();
 
 	mqtt_.setServer(cfg_.host, cfg_.mqttPort);
@@ -183,15 +185,24 @@ void EspManagerClient::flushPendingStatus() {
 	if (pendingStatus_.length() == 0) {
 		return;
 	}
+	bool confirmed = pendingStatus_ == "ok";
 	if (!reportOTA(pendingStatus_.c_str())) {
 		return;
 	}
 	pendingStatus_ = "";
 	if (otaTarget_.length() > 0) {
 		prefs_.begin(prefsNamespace, false);
+		if (confirmed) {
+			prefs_.putULong64(prefsOtaSeqKey, otaPendSeq_);
+		}
 		prefs_.remove(prefsOtaTargetKey);
+		prefs_.remove(prefsOtaPendSeqKey);
 		prefs_.end();
+		if (confirmed) {
+			otaFloor_ = otaPendSeq_;
+		}
 		otaTarget_ = "";
+		otaPendSeq_ = 0;
 	}
 }
 
@@ -212,6 +223,7 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 		return;
 	}
 	if (sequence <= otaFloor_) {
+		pendingStatus_ = "failed";
 		return;
 	}
 
@@ -315,13 +327,9 @@ void EspManagerClient::applyOTA() {
 	}
 
 	prefs_.begin(prefsNamespace, false);
-	prefs_.putULong64(prefsOtaSeqKey, otaSeq_);
-	size_t written = prefs_.putString(prefsOtaTargetKey, otaVersion_);
+	prefs_.putString(prefsOtaTargetKey, otaVersion_);
+	prefs_.putULong64(prefsOtaPendSeqKey, otaSeq_);
 	prefs_.end();
-	otaFloor_ = otaSeq_;
-	if (written != otaVersion_.length()) {
-		reportOTA("ok");
-	}
 
 	delay(200);
 	ESP.restart();

@@ -14,7 +14,10 @@ import (
 	"github.com/LeoHammes1/espmanager/internal/topics"
 )
 
-var ErrNoPublicURL = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
+var (
+	ErrNoPublicURL   = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
+	ErrStaleArtifact = errors.New("deploy: artifact predates the signed-sequence scheme; re-publish to deploy")
+)
 
 type Options struct {
 	CanaryPercent    int
@@ -211,6 +214,9 @@ func (s *Service) setState(ctx context.Context, deployID string, state State) {
 }
 
 func (s *Service) command(driverID, version string, a artifact.Artifact) ([]byte, error) {
+	if a.Sequence == 0 {
+		return nil, ErrStaleArtifact
+	}
 	return json.Marshal(otaCommand{
 		Version:   version,
 		URL:       s.baseURL + artifact.FirmwarePath(driverID, version),

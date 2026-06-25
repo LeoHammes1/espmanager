@@ -32,10 +32,23 @@ func (r *ArtifactRepository) Create(ctx context.Context, a artifact.Artifact) er
 }
 
 func (r *ArtifactRepository) NextSequence(ctx context.Context) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `update artifact_sequence set value = value + 1 where id = 1`); err != nil {
+		return 0, err
+	}
 	var next int64
-	err := r.db.QueryRowContext(ctx,
-		`select coalesce(max(sequence), 0) + 1 from firmware_artifacts`).Scan(&next)
-	return next, err
+	if err := tx.QueryRowContext(ctx, `select value from artifact_sequence where id = 1`).Scan(&next); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func (r *ArtifactRepository) Delete(ctx context.Context, driverID, version string) error {
