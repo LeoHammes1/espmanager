@@ -7,11 +7,11 @@ services:
       - "8080:8080"
       - "1883:1883"
     environment:
-      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
+      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:?set a strong ESPM_WORKER_TOKEN}
       ESPM_ADMIN_USER: ${ESPM_ADMIN_USER:-admin}
       ESPM_ADMIN_PASSWORD: ${ESPM_ADMIN_PASSWORD:-}
       ESPM_SIGNER_URL: http://signer:8090
-      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:-changeme}
+      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:?set a strong ESPM_SIGNER_TOKEN}
     volumes:
       - core-data:/app/data
     depends_on:
@@ -24,7 +24,7 @@ services:
       dockerfile: deploy/Dockerfile.builder
     environment:
       ESPM_CORE_URL: http://core:8080
-      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
+      ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:?set a strong ESPM_WORKER_TOKEN}
     volumes:
       - builder-data:/app/data
       - platformio-cache:/root/.platformio
@@ -37,7 +37,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.signer
     environment:
-      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:-changeme}
+      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:?set a strong ESPM_SIGNER_TOKEN}
     volumes:
       - signer-data:/app/data
     restart: unless-stopped

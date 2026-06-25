@@ -13,7 +13,10 @@ import (
 	"github.com/LeoHammes1/espmanager/internal/httpx"
 )
 
-const maxArtifactSize = 16 << 20
+const (
+	maxArtifactSize = 16 << 20
+	maxFormSlack    = 1 << 20
+)
 
 type ArtifactStore interface {
 	Store(ctx context.Context, in artifact.NewArtifact) (artifact.Artifact, error)
@@ -23,10 +26,21 @@ type ArtifactStore interface {
 
 func uploadArtifact(store ArtifactStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseMultipartForm(maxArtifactSize); err != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxArtifactSize+maxFormSlack)
+		if err := r.ParseMultipartForm(maxFormSlack); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "firmware too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "invalid upload", http.StatusBadRequest)
 			return
 		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
 
 		file, _, err := r.FormFile("firmware")
 		if err != nil {
@@ -35,9 +49,13 @@ func uploadArtifact(store ArtifactStore) http.HandlerFunc {
 		}
 		defer file.Close()
 
-		content, err := io.ReadAll(io.LimitReader(file, maxArtifactSize))
+		content, err := io.ReadAll(io.LimitReader(file, maxArtifactSize+1))
 		if err != nil {
 			http.Error(w, "read failed", http.StatusBadRequest)
+			return
+		}
+		if len(content) > maxArtifactSize {
+			http.Error(w, "firmware too large", http.StatusRequestEntityTooLarge)
 			return
 		}
 
@@ -53,6 +71,8 @@ func uploadArtifact(store ArtifactStore) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, artifact.ErrUnknownDriver):
 			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, artifact.ErrAlreadyExists):
+			http.Error(w, err.Error(), http.StatusConflict)
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
@@ -76,13 +96,14 @@ func serveFirmware(store ArtifactStore) http.HandlerFunc {
 			return
 		}
 
-		if _, err := store.Get(r.Context(), driverID, version); err != nil {
+		a, err := store.Get(r.Context(), driverID, version)
+		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/octet-stream")
-		http.ServeFile(w, r, store.Path(driverID, version))
+		http.ServeFile(w, r, store.Path(a.DriverID, a.Version))
 	}
 }
 

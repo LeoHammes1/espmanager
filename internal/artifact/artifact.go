@@ -19,6 +19,7 @@ type Artifact struct {
 type Repository interface {
 	Create(ctx context.Context, a Artifact) error
 	Get(ctx context.Context, driverID, version string) (Artifact, error)
+	Delete(ctx context.Context, driverID, version string) error
 }
 
 type Signer interface {

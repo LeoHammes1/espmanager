@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 type Config struct {
 	HTTPAddr      string
@@ -13,6 +16,7 @@ type Config struct {
 	AdminPassword string
 	SignerURL     string
 	SignerToken   string
+	BuildTimeout  time.Duration
 }
 
 func Load() Config {
@@ -27,12 +31,22 @@ func Load() Config {
 		AdminPassword: env("ESPM_ADMIN_PASSWORD", ""),
 		SignerURL:     env("ESPM_SIGNER_URL", "http://localhost:8090"),
 		SignerToken:   env("ESPM_SIGNER_TOKEN", ""),
+		BuildTimeout:  envDuration("ESPM_BUILD_TIMEOUT", 30*time.Minute),
 	}
 }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
 	}
 	return def
 }

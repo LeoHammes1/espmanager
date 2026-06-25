@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/LeoHammes1/espmanager/internal/artifact"
@@ -22,16 +23,18 @@ const artifactColumns = "driver_id, version, commit_sha, env, sha256, signature,
 func (r *ArtifactRepository) Create(ctx context.Context, a artifact.Artifact) error {
 	_, err := r.db.ExecContext(ctx, `
 		insert into firmware_artifacts (`+artifactColumns+`)
-		values (?, ?, ?, ?, ?, ?, ?, ?)
-		on conflict(driver_id, version) do update set
-			commit_sha = excluded.commit_sha,
-			env = excluded.env,
-			sha256 = excluded.sha256,
-			signature = excluded.signature,
-			size = excluded.size,
-			created_at = excluded.created_at`,
+		values (?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.DriverID, a.Version, a.Commit, a.Env, a.SHA256, a.Signature, a.Size,
 		a.CreatedAt.UTC().Format(timeFormat))
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint failed") {
+		return artifact.ErrAlreadyExists
+	}
+	return err
+}
+
+func (r *ArtifactRepository) Delete(ctx context.Context, driverID, version string) error {
+	_, err := r.db.ExecContext(ctx,
+		`delete from firmware_artifacts where driver_id = ? and version = ?`, driverID, version)
 	return err
 }
 

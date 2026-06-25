@@ -54,7 +54,7 @@ func run(log *slog.Logger) error {
 	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), driverSvc, hub, log)
 	signer := signclient.New(cfg.SignerURL, cfg.SignerToken, nil)
 	artifactSvc := artifact.NewService(sqlitestore.NewArtifactRepository(db), signer, driverSvc, cfg.ArtifactsDir)
-	jobs := queue.New(db, "builds")
+	jobs := queue.New(db, "builds", cfg.BuildTimeout)
 
 	if cfg.AdminPassword == "" {
 		log.Warn("management UI is unauthenticated; set ESPM_ADMIN_PASSWORD to require login")
@@ -91,7 +91,11 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
+	srv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

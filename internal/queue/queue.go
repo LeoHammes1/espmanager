@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"maragu.dev/goqite"
 )
@@ -24,8 +25,8 @@ type Queue struct {
 	q *goqite.Queue
 }
 
-func New(db *sql.DB, name string) *Queue {
-	return &Queue{q: goqite.New(goqite.NewOpts{DB: db, Name: name})}
+func New(db *sql.DB, name string, timeout time.Duration) *Queue {
+	return &Queue{q: goqite.New(goqite.NewOpts{DB: db, Name: name, Timeout: timeout})}
 }
 
 func (q *Queue) Enqueue(ctx context.Context, job BuildJob) error {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 type Client struct {
@@ -17,7 +18,7 @@ type Client struct {
 
 func New(baseURL, token string, client *http.Client) *Client {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &Client{baseURL: baseURL, token: token, http: client}
 }

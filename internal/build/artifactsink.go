@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"time"
 )
 
 type HTTPArtifactSink struct {
@@ -18,7 +19,7 @@ type HTTPArtifactSink struct {
 
 func NewHTTPArtifactSink(baseURL, token string, client *http.Client) *HTTPArtifactSink {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	return &HTTPArtifactSink{baseURL: baseURL, token: token, client: client}
 }
@@ -26,7 +27,7 @@ func NewHTTPArtifactSink(baseURL, token string, client *http.Client) *HTTPArtifa
 func (s *HTTPArtifactSink) Upload(ctx context.Context, job Job, result Result) error {
 	file, err := os.Open(result.FirmwarePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open firmware: %w", err)
 	}
 	defer file.Close()
 
@@ -48,7 +49,7 @@ func (s *HTTPArtifactSink) Upload(ctx context.Context, job Job, result Result) e
 		return err
 	}
 	if _, err := io.Copy(part, file); err != nil {
-		return err
+		return fmt.Errorf("copy firmware: %w", err)
 	}
 	if err := mw.Close(); err != nil {
 		return err
@@ -67,7 +68,7 @@ func (s *HTTPArtifactSink) Upload(ctx context.Context, job Job, result Result) e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
 		return fmt.Errorf("artifact upload responded %d", resp.StatusCode)
 	}
 	return nil
