@@ -83,7 +83,12 @@ func run(log *slog.Logger) error {
 	defer broker.Close()
 	log.Info("mqtt broker listening", "addr", cfg.MQTTAddr)
 
-	deploySvc := deploy.NewService(sqlitestore.NewDeployRepository(db), deviceSvc, artifactSvc, broker, cfg.PublicURL, log)
+	deploySvc := deploy.NewService(sqlitestore.NewDeployRepository(db), deviceSvc, artifactSvc, broker, cfg.PublicURL,
+		deploy.Options{
+			CanaryPercent:    cfg.CanaryPercent,
+			FailureThreshold: cfg.FailureThreshold,
+			TargetTimeout:    cfg.TargetTimeout,
+		}, log)
 
 	if err := subscribeTelemetry(broker, deviceSvc, deploySvc); err != nil {
 		return err
@@ -121,6 +126,19 @@ func run(log *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go func() {
+		ticker := time.NewTicker(cfg.ReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				deploySvc.Reconcile(ctx)
+			}
+		}
+	}()
 
 	go func() {
 		log.Info("http server listening", "addr", cfg.HTTPAddr)

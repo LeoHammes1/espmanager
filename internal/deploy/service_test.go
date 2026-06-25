@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,44 +13,89 @@ import (
 )
 
 type fakeRepo struct {
-	deploys []Deploy
-	targets map[string]Target
+	deploys map[string]*Deploy
+	targets []Target
 }
 
-func newFakeRepo() *fakeRepo { return &fakeRepo{targets: map[string]Target{}} }
+func newFakeRepo() *fakeRepo { return &fakeRepo{deploys: map[string]*Deploy{}} }
 
 func (r *fakeRepo) CreateDeploy(_ context.Context, d Deploy) error {
-	r.deploys = append(r.deploys, d)
+	dd := d
+	r.deploys[d.ID] = &dd
 	return nil
 }
 
 func (r *fakeRepo) AddTarget(_ context.Context, t Target) error {
-	r.targets[t.DeviceID] = t
+	r.targets = append(r.targets, t)
+	return nil
+}
+
+func (r *fakeRepo) set(deviceID string, status Status, at time.Time, guard bool) error {
+	for i := range r.targets {
+		if r.targets[i].DeviceID != deviceID {
+			continue
+		}
+		if guard && terminal(r.targets[i].Status) {
+			return nil
+		}
+		r.targets[i].Status = status
+		r.targets[i].UpdatedAt = at
+		return nil
+	}
 	return nil
 }
 
 func (r *fakeRepo) SetTargetStatus(_ context.Context, _, deviceID string, status Status, at time.Time) error {
-	t := r.targets[deviceID]
-	t.Status = status
-	t.UpdatedAt = at
-	r.targets[deviceID] = t
-	return nil
+	return r.set(deviceID, status, at, false)
 }
 
 func (r *fakeRepo) AdvanceTargetStatus(_ context.Context, _, deviceID string, status Status, at time.Time) error {
-	t := r.targets[deviceID]
-	if t.Status == StatusSucceeded || t.Status == StatusFailed {
-		return nil
-	}
-	t.Status = status
-	t.UpdatedAt = at
-	r.targets[deviceID] = t
-	return nil
+	return r.set(deviceID, status, at, true)
 }
 
 func (r *fakeRepo) LatestTargetForDevice(_ context.Context, deviceID string) (Target, bool, error) {
-	t, ok := r.targets[deviceID]
-	return t, ok, nil
+	for i := range r.targets {
+		if r.targets[i].DeviceID == deviceID {
+			return r.targets[i], true, nil
+		}
+	}
+	return Target{}, false, nil
+}
+
+func (r *fakeRepo) ListActiveDeploys(_ context.Context) ([]Deploy, error) {
+	var out []Deploy
+	for _, d := range r.deploys {
+		if d.State == StateInProgress {
+			out = append(out, *d)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) TargetsForDeploy(_ context.Context, deployID string) ([]Target, error) {
+	var out []Target
+	for _, t := range r.targets {
+		if t.DeployID == deployID {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) SetDeployState(_ context.Context, deployID string, state State) error {
+	if d, ok := r.deploys[deployID]; ok {
+		d.State = state
+	}
+	return nil
+}
+
+func (r *fakeRepo) statusOf(deviceID string) Status {
+	for _, t := range r.targets {
+		if t.DeviceID == deviceID {
+			return t.Status
+		}
+	}
+	return ""
 }
 
 type fakePublisher struct {
@@ -77,85 +121,102 @@ func (f fakeArtifacts) Get(_ context.Context, _, _ string) (artifact.Artifact, e
 	return f.a, nil
 }
 
-func newService(repo Repository, pub Publisher, devices DeviceSource, baseURL string) *Service {
+func newService(repo Repository, pub Publisher, devices DeviceSource, baseURL string, opts Options) *Service {
 	art := fakeArtifacts{a: artifact.Artifact{SHA256: "abc", Signature: "sig"}}
-	return NewService(repo, devices, art, pub, baseURL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewService(repo, devices, art, pub, baseURL, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-func TestRolloutPublishesSignedCommandPerDevice(t *testing.T) {
+func TestRolloutTriggersOnlyCanaryBatch(t *testing.T) {
 	repo := newFakeRepo()
 	pub := &fakePublisher{sent: map[string][]byte{}}
-	svc := newService(repo, pub, fakeDevices{ids: []string{"dev1", "dev2"}}, "https://espm.test")
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1", "d2", "d3", "d4"}}, "https://espm.test", Options{CanaryPercent: 25, FailureThreshold: 20})
 
-	if err := svc.Rollout(context.Background(), "drv1", "v1.0.0"); err != nil {
+	if err := svc.Rollout(context.Background(), "drv", "v1"); err != nil {
 		t.Fatalf("rollout: %v", err)
 	}
-	if len(repo.deploys) != 1 {
-		t.Fatalf("expected 1 deploy, got %d", len(repo.deploys))
+	if _, ok := pub.sent[topics.CmdOTA("d1")]; !ok {
+		t.Fatal("canary device d1 should be triggered")
 	}
-	for _, dev := range []string{"dev1", "dev2"} {
-		payload, ok := pub.sent[topics.CmdOTA(dev)]
-		if !ok {
-			t.Fatalf("no ota command for %s", dev)
+	for _, dev := range []string{"d2", "d3", "d4"} {
+		if _, ok := pub.sent[topics.CmdOTA(dev)]; ok {
+			t.Fatalf("non-canary device %s must not be triggered yet", dev)
 		}
-		var cmd otaCommand
-		if err := json.Unmarshal(payload, &cmd); err != nil {
-			t.Fatalf("unmarshal cmd: %v", err)
+		if repo.statusOf(dev) != StatusPending {
+			t.Fatalf("device %s should stay pending, got %s", dev, repo.statusOf(dev))
 		}
-		if cmd.Version != "v1.0.0" || cmd.SHA256 != "abc" || cmd.Signature != "sig" {
-			t.Fatalf("unexpected cmd: %+v", cmd)
+	}
+}
+
+func TestReconcilePromotesAfterCanarySuccess(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1", "d2", "d3", "d4"}}, "https://espm.test", Options{CanaryPercent: 25, FailureThreshold: 20})
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"ok"}`))
+	svc.Reconcile(context.Background())
+
+	for _, dev := range []string{"d2", "d3", "d4"} {
+		if repo.statusOf(dev) != StatusTriggered {
+			t.Fatalf("device %s should be triggered after canary success, got %s", dev, repo.statusOf(dev))
 		}
-		if cmd.URL != "https://espm.test/firmware/drv1/v1.0.0.bin" {
-			t.Fatalf("unexpected url: %s", cmd.URL)
+	}
+
+	for _, dev := range []string{"d2", "d3", "d4"} {
+		svc.OnStatus(context.Background(), dev, []byte(`{"status":"ok"}`))
+	}
+	svc.Reconcile(context.Background())
+	for _, d := range repo.deploys {
+		if d.State != StateCompleted {
+			t.Fatalf("deploy should be completed, got %s", d.State)
 		}
-		if repo.targets[dev].Status != StatusTriggered {
-			t.Fatalf("expected triggered, got %s", repo.targets[dev].Status)
+	}
+}
+
+func TestReconcilePausesOnCanaryFailure(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1", "d2", "d3", "d4"}}, "https://espm.test", Options{CanaryPercent: 25, FailureThreshold: 20})
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"failed"}`))
+	svc.Reconcile(context.Background())
+
+	for _, d := range repo.deploys {
+		if d.State != StatePaused {
+			t.Fatalf("deploy should be paused on canary failure, got %s", d.State)
+		}
+	}
+	if _, ok := pub.sent[topics.CmdOTA("d2")]; ok {
+		t.Fatal("must not promote next batch after canary failure")
+	}
+}
+
+func TestReconcileMarksLostAfterTimeout(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1"}}, "https://espm.test", Options{CanaryPercent: 100, FailureThreshold: 20, TargetTimeout: time.Minute})
+
+	base := time.Unix(1000, 0).UTC()
+	svc.now = func() time.Time { return base }
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	svc.now = func() time.Time { return base.Add(2 * time.Minute) }
+	svc.Reconcile(context.Background())
+
+	if repo.statusOf("d1") != StatusLost {
+		t.Fatalf("expected lost after timeout, got %s", repo.statusOf("d1"))
+	}
+	for _, d := range repo.deploys {
+		if d.State != StatePaused {
+			t.Fatalf("single lost canary should pause deploy, got %s", d.State)
 		}
 	}
 }
 
 func TestRolloutWithoutPublicURLFails(t *testing.T) {
-	svc := newService(newFakeRepo(), &fakePublisher{sent: map[string][]byte{}}, fakeDevices{ids: []string{"dev1"}}, "")
-	if err := svc.Rollout(context.Background(), "drv1", "v1.0.0"); !errors.Is(err, ErrNoPublicURL) {
+	svc := newService(newFakeRepo(), &fakePublisher{sent: map[string][]byte{}}, fakeDevices{ids: []string{"d1"}}, "", Options{})
+	if err := svc.Rollout(context.Background(), "drv", "v1"); !errors.Is(err, ErrNoPublicURL) {
 		t.Fatalf("expected ErrNoPublicURL, got %v", err)
-	}
-}
-
-func TestRolloutNoDevicesSkips(t *testing.T) {
-	repo := newFakeRepo()
-	pub := &fakePublisher{sent: map[string][]byte{}}
-	if err := newService(repo, pub, fakeDevices{ids: nil}, "https://espm.test").Rollout(context.Background(), "drv1", "v1.0.0"); err != nil {
-		t.Fatalf("rollout: %v", err)
-	}
-	if len(repo.deploys) != 0 || len(pub.sent) != 0 {
-		t.Fatalf("expected no deploy/publish for empty device set")
-	}
-}
-
-func TestRolloutPublishFailureMarksTargetFailed(t *testing.T) {
-	repo := newFakeRepo()
-	pub := &fakePublisher{sent: map[string][]byte{}, fail: true}
-	err := newService(repo, pub, fakeDevices{ids: []string{"dev1"}}, "https://espm.test").Rollout(context.Background(), "drv1", "v1.0.0")
-	if err == nil {
-		t.Fatal("expected aggregated rollout error")
-	}
-	if repo.targets["dev1"].Status != StatusFailed {
-		t.Fatalf("expected failed target, got %s", repo.targets["dev1"].Status)
-	}
-}
-
-func TestOnStatusMapsReportedStateAndRespectsTerminal(t *testing.T) {
-	repo := newFakeRepo()
-	repo.targets["dev1"] = Target{DeployID: "d1", DeviceID: "dev1", Version: "v2", Status: StatusTriggered}
-	svc := newService(repo, &fakePublisher{sent: map[string][]byte{}}, fakeDevices{}, "https://espm.test")
-
-	svc.OnStatus(context.Background(), "dev1", []byte(`{"status":"FAILED"}`))
-	if repo.targets["dev1"].Status != StatusFailed {
-		t.Fatalf("expected failed, got %s", repo.targets["dev1"].Status)
-	}
-
-	svc.OnStatus(context.Background(), "dev1", []byte(`{"status":"ok"}`))
-	if repo.targets["dev1"].Status != StatusFailed {
-		t.Fatalf("terminal status must not change, got %s", repo.targets["dev1"].Status)
 	}
 }

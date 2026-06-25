@@ -14,12 +14,22 @@ const (
 	StatusTriggered Status = "triggered"
 	StatusSucceeded Status = "succeeded"
 	StatusFailed    Status = "failed"
+	StatusLost      Status = "lost"
+)
+
+type State string
+
+const (
+	StateInProgress State = "in_progress"
+	StatePaused     State = "paused"
+	StateCompleted  State = "completed"
 )
 
 type Deploy struct {
 	ID        string
 	DriverID  string
 	Version   string
+	State     State
 	CreatedAt time.Time
 }
 
@@ -27,6 +37,7 @@ type Target struct {
 	DeployID  string
 	DeviceID  string
 	Version   string
+	Batch     int
 	Status    Status
 	UpdatedAt time.Time
 }
@@ -37,6 +48,9 @@ type Repository interface {
 	SetTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
 	AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) error
 	LatestTargetForDevice(ctx context.Context, deviceID string) (Target, bool, error)
+	ListActiveDeploys(ctx context.Context) ([]Deploy, error)
+	TargetsForDeploy(ctx context.Context, deployID string) ([]Target, error)
+	SetDeployState(ctx context.Context, deployID string, state State) error
 }
 
 type Publisher interface {
@@ -49,4 +63,8 @@ type DeviceSource interface {
 
 type ArtifactSource interface {
 	Get(ctx context.Context, driverID, version string) (artifact.Artifact, error)
+}
+
+func terminal(s Status) bool {
+	return s == StatusSucceeded || s == StatusFailed || s == StatusLost
 }

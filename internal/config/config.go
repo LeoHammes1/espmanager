@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -16,9 +17,13 @@ type Config struct {
 	AdminPassword string
 	SignerURL     string
 	SignerToken   string
-	BuildTimeout  time.Duration
-	PublicURL     string
-	ClaimTTL      time.Duration
+	BuildTimeout      time.Duration
+	PublicURL         string
+	ClaimTTL          time.Duration
+	CanaryPercent     int
+	FailureThreshold  int
+	TargetTimeout     time.Duration
+	ReconcileInterval time.Duration
 }
 
 func Load() Config {
@@ -34,9 +39,22 @@ func Load() Config {
 		SignerURL:     env("ESPM_SIGNER_URL", "http://localhost:8090"),
 		SignerToken:   env("ESPM_SIGNER_TOKEN", ""),
 		BuildTimeout:  envDuration("ESPM_BUILD_TIMEOUT", 30*time.Minute),
-		PublicURL:     env("ESPM_PUBLIC_URL", ""),
-		ClaimTTL:      envDuration("ESPM_CLAIM_TTL", 15*time.Minute),
+		PublicURL:         env("ESPM_PUBLIC_URL", ""),
+		ClaimTTL:          envDuration("ESPM_CLAIM_TTL", 15*time.Minute),
+		CanaryPercent:     envInt("ESPM_CANARY_PERCENT", 20),
+		FailureThreshold:  envInt("ESPM_FAILURE_THRESHOLD", 20),
+		TargetTimeout:     envDuration("ESPM_DEPLOY_TIMEOUT", 5*time.Minute),
+		ReconcileInterval: envDuration("ESPM_RECONCILE_INTERVAL", 10*time.Second),
 	}
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 func env(key, def string) string {

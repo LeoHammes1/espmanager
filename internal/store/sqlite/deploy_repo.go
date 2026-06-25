@@ -19,16 +19,16 @@ func NewDeployRepository(db *sql.DB) *DeployRepository {
 
 func (r *DeployRepository) CreateDeploy(ctx context.Context, d deploy.Deploy) error {
 	_, err := r.db.ExecContext(ctx,
-		`insert into deploys (id, driver_id, version, created_at) values (?, ?, ?, ?)`,
-		d.ID, d.DriverID, d.Version, d.CreatedAt.UTC().Format(timeFormat))
+		`insert into deploys (id, driver_id, version, state, created_at) values (?, ?, ?, ?, ?)`,
+		d.ID, d.DriverID, d.Version, string(d.State), d.CreatedAt.UTC().Format(timeFormat))
 	return err
 }
 
 func (r *DeployRepository) AddTarget(ctx context.Context, t deploy.Target) error {
 	_, err := r.db.ExecContext(ctx, `
-		insert into deploy_targets (deploy_id, device_id, version, status, updated_at)
-		values (?, ?, ?, ?, ?)`,
-		t.DeployID, t.DeviceID, t.Version, string(t.Status), t.UpdatedAt.UTC().Format(timeFormat))
+		insert into deploy_targets (deploy_id, device_id, version, batch, status, updated_at)
+		values (?, ?, ?, ?, ?, ?)`,
+		t.DeployID, t.DeviceID, t.Version, t.Batch, string(t.Status), t.UpdatedAt.UTC().Format(timeFormat))
 	return err
 }
 
@@ -43,27 +43,83 @@ func (r *DeployRepository) SetTargetStatus(ctx context.Context, deployID, device
 func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
 		update deploy_targets set status = ?, updated_at = ?
-		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed')`,
+		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed', 'lost')`,
 		string(status), at.UTC().Format(timeFormat), deployID, deviceID)
 	return err
 }
 
 func (r *DeployRepository) LatestTargetForDevice(ctx context.Context, deviceID string) (deploy.Target, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-		select t.deploy_id, t.device_id, t.version, t.status, t.updated_at
+		select t.deploy_id, t.device_id, t.version, t.batch, t.status, t.updated_at
 		from deploy_targets t join deploys d on d.id = t.deploy_id
 		where t.device_id = ? order by d.created_at desc, t.updated_at desc limit 1`, deviceID)
 
-	var t deploy.Target
-	var status, updatedAt string
-	err := row.Scan(&t.DeployID, &t.DeviceID, &t.Version, &status, &updatedAt)
+	t, err := scanTarget(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deploy.Target{}, false, nil
 	}
 	if err != nil {
 		return deploy.Target{}, false, err
 	}
+	return t, true, nil
+}
+
+func (r *DeployRepository) ListActiveDeploys(ctx context.Context) ([]deploy.Deploy, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`select id, driver_id, version, state, created_at from deploys where state = ? order by created_at`,
+		string(deploy.StateInProgress))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []deploy.Deploy
+	for rows.Next() {
+		var d deploy.Deploy
+		var state, createdAt string
+		if err := rows.Scan(&d.ID, &d.DriverID, &d.Version, &state, &createdAt); err != nil {
+			return nil, err
+		}
+		d.State = deploy.State(state)
+		d.CreatedAt, _ = time.Parse(timeFormat, createdAt)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (r *DeployRepository) TargetsForDeploy(ctx context.Context, deployID string) ([]deploy.Target, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		select deploy_id, device_id, version, batch, status, updated_at
+		from deploy_targets where deploy_id = ?`, deployID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []deploy.Target
+	for rows.Next() {
+		t, err := scanTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (r *DeployRepository) SetDeployState(ctx context.Context, deployID string, state deploy.State) error {
+	_, err := r.db.ExecContext(ctx,
+		`update deploys set state = ? where id = ?`, string(state), deployID)
+	return err
+}
+
+func scanTarget(s rowScanner) (deploy.Target, error) {
+	var t deploy.Target
+	var status, updatedAt string
+	if err := s.Scan(&t.DeployID, &t.DeviceID, &t.Version, &t.Batch, &status, &updatedAt); err != nil {
+		return deploy.Target{}, err
+	}
 	t.Status = deploy.Status(status)
 	t.UpdatedAt, _ = time.Parse(timeFormat, updatedAt)
-	return t, true, nil
+	return t, nil
 }

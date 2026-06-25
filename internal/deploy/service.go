@@ -16,23 +16,34 @@ import (
 
 var ErrNoPublicURL = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
 
+type Options struct {
+	CanaryPercent    int
+	FailureThreshold int
+	TargetTimeout    time.Duration
+}
+
 type Service struct {
 	repo      Repository
 	devices   DeviceSource
 	artifacts ArtifactSource
 	publisher Publisher
 	baseURL   string
+	opts      Options
 	log       *slog.Logger
 	now       func() time.Time
 }
 
-func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource, publisher Publisher, baseURL string, log *slog.Logger) *Service {
+func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource, publisher Publisher, baseURL string, opts Options, log *slog.Logger) *Service {
+	if opts.CanaryPercent <= 0 || opts.CanaryPercent > 100 {
+		opts.CanaryPercent = 100
+	}
 	return &Service{
 		repo:      repo,
 		devices:   devices,
 		artifacts: artifacts,
 		publisher: publisher,
 		baseURL:   baseURL,
+		opts:      opts,
 		log:       log,
 		now:       time.Now,
 	}
@@ -66,37 +77,129 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 	if err != nil {
 		return err
 	}
-	d := Deploy{ID: deployID, DriverID: driverID, Version: version, CreatedAt: s.now().UTC()}
+	d := Deploy{ID: deployID, DriverID: driverID, Version: version, State: StateInProgress, CreatedAt: s.now().UTC()}
 	if err := s.repo.CreateDeploy(ctx, d); err != nil {
 		return err
 	}
 
-	cmd, err := json.Marshal(otaCommand{
+	canaryCount := (len(deviceIDs)*s.opts.CanaryPercent + 99) / 100
+	if canaryCount < 1 {
+		canaryCount = 1
+	}
+	if canaryCount > len(deviceIDs) {
+		canaryCount = len(deviceIDs)
+	}
+
+	var errs []error
+	for i, deviceID := range deviceIDs {
+		batch := 0
+		if i >= canaryCount {
+			batch = 1
+		}
+		t := Target{DeployID: d.ID, DeviceID: deviceID, Version: version, Batch: batch, Status: StatusPending, UpdatedAt: s.now().UTC()}
+		if err := s.repo.AddTarget(ctx, t); err != nil {
+			errs = append(errs, fmt.Errorf("add target %s: %w", deviceID, err))
+		}
+	}
+
+	cmd, err := s.command(driverID, version, a)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	for _, deviceID := range deviceIDs[:canaryCount] {
+		errs = append(errs, s.trigger(ctx, d.ID, deviceID, cmd))
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) Reconcile(ctx context.Context) {
+	deploys, err := s.repo.ListActiveDeploys(ctx)
+	if err != nil {
+		s.log.Error("list active deploys failed", "err", err)
+		return
+	}
+	for _, d := range deploys {
+		s.reconcile(ctx, d)
+	}
+}
+
+func (s *Service) reconcile(ctx context.Context, d Deploy) {
+	targets, err := s.repo.TargetsForDeploy(ctx, d.ID)
+	if err != nil {
+		s.log.Error("load deploy targets failed", "deploy", d.ID, "err", err)
+		return
+	}
+
+	now := s.now().UTC()
+	for i := range targets {
+		t := &targets[i]
+		if t.Status == StatusTriggered && now.Sub(t.UpdatedAt) > s.opts.TargetTimeout {
+			if err := s.repo.AdvanceTargetStatus(ctx, d.ID, t.DeviceID, StatusLost, now); err != nil {
+				s.log.Error("mark lost failed", "deploy", d.ID, "device", t.DeviceID, "err", err)
+				continue
+			}
+			t.Status = StatusLost
+		}
+	}
+
+	for _, batch := range sortedBatches(targets) {
+		group := filterBatch(targets, batch)
+		if allTerminal(group) {
+			if failureExceeded(group, s.opts.FailureThreshold) {
+				s.setState(d.ID, StatePaused)
+				return
+			}
+			continue
+		}
+		if pending := filterPending(group); len(pending) > 0 {
+			s.promote(ctx, d, pending)
+			return
+		}
+		return
+	}
+	s.setState(d.ID, StateCompleted)
+}
+
+func (s *Service) promote(ctx context.Context, d Deploy, pending []Target) {
+	a, err := s.artifacts.Get(ctx, d.DriverID, d.Version)
+	if err != nil {
+		s.log.Error("promote: artifact lookup failed", "deploy", d.ID, "err", err)
+		return
+	}
+	cmd, err := s.command(d.DriverID, d.Version, a)
+	if err != nil {
+		s.log.Error("promote: build command failed", "deploy", d.ID, "err", err)
+		return
+	}
+	for _, t := range pending {
+		_ = s.trigger(ctx, d.ID, t.DeviceID, cmd)
+	}
+}
+
+func (s *Service) trigger(ctx context.Context, deployID, deviceID string, cmd []byte) error {
+	if err := s.publisher.Publish(topics.CmdOTA(deviceID), cmd); err != nil {
+		_ = s.repo.SetTargetStatus(ctx, deployID, deviceID, StatusFailed, s.now().UTC())
+		return fmt.Errorf("publish %s: %w", deviceID, err)
+	}
+	if err := s.repo.SetTargetStatus(ctx, deployID, deviceID, StatusTriggered, s.now().UTC()); err != nil {
+		return fmt.Errorf("trigger %s: %w", deviceID, err)
+	}
+	return nil
+}
+
+func (s *Service) setState(deployID string, state State) {
+	if err := s.repo.SetDeployState(context.Background(), deployID, state); err != nil {
+		s.log.Error("set deploy state failed", "deploy", deployID, "state", state, "err", err)
+	}
+}
+
+func (s *Service) command(driverID, version string, a artifact.Artifact) ([]byte, error) {
+	return json.Marshal(otaCommand{
 		Version:   version,
 		URL:       s.baseURL + artifact.FirmwarePath(driverID, version),
 		SHA256:    a.SHA256,
 		Signature: a.Signature,
 	})
-	if err != nil {
-		return err
-	}
-
-	var errs []error
-	for _, deviceID := range deviceIDs {
-		if err := s.repo.AddTarget(ctx, Target{DeployID: d.ID, DeviceID: deviceID, Version: version, Status: StatusPending, UpdatedAt: s.now().UTC()}); err != nil {
-			errs = append(errs, fmt.Errorf("add target %s: %w", deviceID, err))
-			continue
-		}
-		if err := s.publisher.Publish(topics.CmdOTA(deviceID), cmd); err != nil {
-			errs = append(errs, fmt.Errorf("publish %s: %w", deviceID, err))
-			_ = s.repo.SetTargetStatus(ctx, d.ID, deviceID, StatusFailed, s.now().UTC())
-			continue
-		}
-		if err := s.repo.SetTargetStatus(ctx, d.ID, deviceID, StatusTriggered, s.now().UTC()); err != nil {
-			errs = append(errs, fmt.Errorf("trigger %s: %w", deviceID, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte) {
@@ -139,4 +242,63 @@ func mapStatus(reported string) Status {
 	default:
 		return ""
 	}
+}
+
+func sortedBatches(targets []Target) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, t := range targets {
+		if !seen[t.Batch] {
+			seen[t.Batch] = true
+			out = append(out, t.Batch)
+		}
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+func filterBatch(targets []Target, batch int) []Target {
+	var out []Target
+	for _, t := range targets {
+		if t.Batch == batch {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func filterPending(targets []Target) []Target {
+	var out []Target
+	for _, t := range targets {
+		if t.Status == StatusPending {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func allTerminal(targets []Target) bool {
+	for _, t := range targets {
+		if !terminal(t.Status) {
+			return false
+		}
+	}
+	return true
+}
+
+func failureExceeded(targets []Target, thresholdPercent int) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	failures := 0
+	for _, t := range targets {
+		if t.Status == StatusFailed || t.Status == StatusLost {
+			failures++
+		}
+	}
+	return failures*100 > thresholdPercent*len(targets)
 }
