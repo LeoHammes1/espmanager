@@ -9,12 +9,13 @@ import (
 type Worker struct {
 	source   JobSource
 	compiler Compiler
+	sink     ArtifactSink
 	log      *slog.Logger
 	interval time.Duration
 }
 
-func NewWorker(source JobSource, compiler Compiler, log *slog.Logger, interval time.Duration) *Worker {
-	return &Worker{source: source, compiler: compiler, log: log, interval: interval}
+func NewWorker(source JobSource, compiler Compiler, sink ArtifactSink, log *slog.Logger, interval time.Duration) *Worker {
+	return &Worker{source: source, compiler: compiler, sink: sink, log: log, interval: interval}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -41,13 +42,18 @@ func (w *Worker) poll(ctx context.Context) {
 	}
 
 	w.log.Info("building", "id", job.ID, "repo", job.Repo, "commit", job.Commit)
-	artifact, err := w.compiler.Compile(ctx, *job)
+	result, err := w.compiler.Compile(ctx, *job)
 	if err != nil {
 		w.log.Error("build failed", "id", job.ID, "err", err)
 		return
 	}
 
-	w.log.Info("build complete", "id", job.ID, "artifact", artifact)
+	if err := w.sink.Upload(ctx, *job, result); err != nil {
+		w.log.Error("artifact upload failed", "id", job.ID, "err", err)
+		return
+	}
+
+	w.log.Info("build published", "id", job.ID, "version", result.Version)
 	if err := w.source.Complete(ctx, job.ID); err != nil {
 		w.log.Error("complete job failed", "id", job.ID, "err", err)
 	}

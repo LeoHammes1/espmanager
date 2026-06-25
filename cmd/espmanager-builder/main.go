@@ -26,6 +26,7 @@ func main() {
 	worker := build.NewWorker(
 		build.NewHTTPJobSource(coreURL, token, nil),
 		build.NewPlatformIOCompiler(workspace),
+		build.NewHTTPArtifactSink(coreURL, token, nil),
 		log,
 		5*time.Second,
 	)

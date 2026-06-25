@@ -12,12 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LeoHammes1/espmanager/internal/artifact"
 	"github.com/LeoHammes1/espmanager/internal/config"
 	"github.com/LeoHammes1/espmanager/internal/device"
 	"github.com/LeoHammes1/espmanager/internal/driver"
 	"github.com/LeoHammes1/espmanager/internal/httpapi"
 	"github.com/LeoHammes1/espmanager/internal/mqttbroker"
 	"github.com/LeoHammes1/espmanager/internal/queue"
+	"github.com/LeoHammes1/espmanager/internal/signclient"
 	sqlitestore "github.com/LeoHammes1/espmanager/internal/store/sqlite"
 	"github.com/LeoHammes1/espmanager/internal/web"
 	"github.com/LeoHammes1/espmanager/internal/webhook"
@@ -50,6 +52,8 @@ func run(log *slog.Logger) error {
 	hub := httpapi.NewSSEHub()
 	driverSvc := driver.NewService(sqlitestore.NewDriverRepository(db))
 	deviceSvc := device.NewService(sqlitestore.NewDeviceRepository(db), driverSvc, hub, log)
+	signer := signclient.New(cfg.SignerURL, cfg.SignerToken, nil)
+	artifactSvc := artifact.NewService(sqlitestore.NewArtifactRepository(db), signer, driverSvc, cfg.ArtifactsDir)
 	jobs := queue.New(db, "builds")
 
 	if cfg.AdminPassword == "" {
@@ -74,6 +78,7 @@ func run(log *slog.Logger) error {
 	router, err := httpapi.NewRouter(httpapi.Options{
 		Devices:       deviceSvc,
 		Drivers:       driverSvc,
+		Artifacts:     artifactSvc,
 		Hub:           hub,
 		Templates:     tmpl,
 		Queue:         jobs,

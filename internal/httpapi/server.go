@@ -29,6 +29,7 @@ type DriverService interface {
 type Options struct {
 	Devices       DeviceService
 	Drivers       DriverService
+	Artifacts     ArtifactStore
 	Hub           *SSEHub
 	Templates     *template.Template
 	Queue         *queue.Queue
@@ -52,10 +53,13 @@ func NewRouter(opts Options) (http.Handler, error) {
 		r.Post("/webhook/git/{driverID}", opts.Webhook.ServeHTTP)
 	}
 
+	r.Get("/firmware/{driver}/{file}", serveFirmware(opts.Artifacts))
+
 	r.Group(func(wr chi.Router) {
 		wr.Use(httpx.BearerAuth(opts.WorkerToken))
 		wr.Get("/v1/jobs/next", nextJob(opts.Queue))
 		wr.Post("/v1/jobs/{id}/complete", completeJob(opts.Queue))
+		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts))
 	})
 
 	r.Group(func(ur chi.Router) {

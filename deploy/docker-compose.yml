@@ -10,8 +10,12 @@ services:
       ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:-changeme}
       ESPM_ADMIN_USER: ${ESPM_ADMIN_USER:-admin}
       ESPM_ADMIN_PASSWORD: ${ESPM_ADMIN_PASSWORD:-}
+      ESPM_SIGNER_URL: http://signer:8090
+      ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:-changeme}
     volumes:
       - core-data:/app/data
+    depends_on:
+      - signer
     restart: unless-stopped
 
   builder:

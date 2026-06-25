@@ -7,9 +7,12 @@ type Config struct {
 	MQTTAddr      string
 	DBPath        string
 	DataDir       string
+	ArtifactsDir  string
 	WorkerToken   string
 	AdminUser     string
 	AdminPassword string
+	SignerURL     string
+	SignerToken   string
 }
 
 func Load() Config {
@@ -18,9 +21,12 @@ func Load() Config {
 		MQTTAddr:      env("ESPM_MQTT_ADDR", ":1883"),
 		DBPath:        env("ESPM_DB_PATH", "data/espmanager.db"),
 		DataDir:       env("ESPM_DATA_DIR", "data"),
+		ArtifactsDir:  env("ESPM_ARTIFACTS_DIR", "data/artifacts"),
 		WorkerToken:   env("ESPM_WORKER_TOKEN", ""),
 		AdminUser:     env("ESPM_ADMIN_USER", "admin"),
 		AdminPassword: env("ESPM_ADMIN_PASSWORD", ""),
+		SignerURL:     env("ESPM_SIGNER_URL", "http://localhost:8090"),
+		SignerToken:   env("ESPM_SIGNER_TOKEN", ""),
 	}
 }
 

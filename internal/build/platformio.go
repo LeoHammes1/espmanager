@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 type PlatformIOCompiler struct {
@@ -16,14 +17,14 @@ func NewPlatformIOCompiler(workspace string) *PlatformIOCompiler {
 	return &PlatformIOCompiler{workspace: workspace}
 }
 
-func (c *PlatformIOCompiler) Compile(ctx context.Context, job Job) (string, error) {
+func (c *PlatformIOCompiler) Compile(ctx context.Context, job Job) (Result, error) {
 	dir, err := os.MkdirTemp(c.workspace, "build-*")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	if err := run(ctx, dir, "git", "clone", "--depth", "1", "--", job.Repo, dir); err != nil {
-		return "", fmt.Errorf("clone: %w", err)
+		return Result{}, fmt.Errorf("clone: %w", err)
 	}
 	if job.Commit != "" {
 		if err := run(ctx, dir, "git", "fetch", "--depth", "1", "origin", "--end-of-options", job.Commit); err == nil {
@@ -36,17 +37,41 @@ func (c *PlatformIOCompiler) Compile(ctx context.Context, job Job) (string, erro
 		args = append(args, "-e", job.Env)
 	}
 	if err := run(ctx, dir, "pio", args...); err != nil {
-		return "", fmt.Errorf("pio run: %w", err)
+		return Result{}, fmt.Errorf("pio run: %w", err)
 	}
 
-	return filepath.Join(dir, ".pio", "build", job.Env, "firmware.bin"), nil
+	return Result{
+		FirmwarePath: filepath.Join(dir, ".pio", "build", job.Env, "firmware.bin"),
+		Version:      version(ctx, dir, job.Commit),
+	}, nil
+}
+
+func version(ctx context.Context, dir, commit string) string {
+	out, err := output(ctx, dir, "git", "describe", "--tags", "--always")
+	if v := strings.TrimSpace(out); err == nil && v != "" {
+		return v
+	}
+	if len(commit) >= 12 {
+		return commit[:12]
+	}
+	return commit
 }
 
 func run(ctx context.Context, dir, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
+	cmd := command(ctx, dir, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL=http:https")
 	return cmd.Run()
+}
+
+func output(ctx context.Context, dir, name string, args ...string) (string, error) {
+	out, err := command(ctx, dir, name, args...).Output()
+	return string(out), err
+}
+
+func command(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL=http:https")
+	return cmd
 }
