@@ -7,6 +7,7 @@
   "platforms": "espressif32",
   "dependencies": [
     { "owner": "knolleary", "name": "PubSubClient", "version": "^2.8" },
-    { "owner": "bblanchon", "name": "ArduinoJson", "version": "^7.0" }
+    { "owner": "bblanchon", "name": "ArduinoJson", "version": "^7.0" },
+    { "owner": "rweather", "name": "Crypto", "version": "^0.4.0" }
   ]
 }

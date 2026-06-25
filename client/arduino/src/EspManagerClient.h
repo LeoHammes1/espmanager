@@ -13,6 +13,7 @@ struct EspManagerConfig {
 	uint16_t mqttPort;
 	const char *claimToken;
 	const char *firmwareVersion;
+	const char *signingPublicKeyHex;
 	uint32_t heartbeatIntervalMs;
 };
 
@@ -32,12 +33,17 @@ private:
 	bool connectMQTT();
 	void publishHeartbeat();
 	void onMessage(const char *topic, const uint8_t *payload, unsigned int length);
+	void applyOTA(const String &targetVersion, const String &url, const String &sha256Hex, const String &signatureHex);
+	void confirmOTA();
+	void reportOTA(const char *status);
 
 	String topic(const char *suffix) const;
+	static bool hexToBytes(const String &hex, uint8_t *out, size_t outLen);
 
 	EspManagerConfig cfg_;
 	String deviceID_;
 	String password_;
+	String otaTarget_;
 	WiFiClient net_;
 	PubSubClient mqtt_;
 	Preferences prefs_;

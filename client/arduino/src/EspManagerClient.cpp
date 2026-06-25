@@ -1,15 +1,20 @@
 #include "EspManagerClient.h"
 
 #include <ArduinoJson.h>
+#include <Ed25519.h>
 #include <HTTPClient.h>
+#include <SHA256.h>
+#include <Update.h>
 #include <WiFi.h>
 
 namespace {
 constexpr char prefsNamespace[] = "espm";
 constexpr char prefsPasswordKey[] = "mqttpass";
+constexpr char prefsOtaTargetKey[] = "otatarget";
 constexpr uint32_t reconnectIntervalMs = 5000;
 constexpr uint32_t claimRetryIntervalMs = 15000;
 constexpr uint32_t wifiRetryIntervalMs = 30000;
+constexpr uint32_t otaIdleTimeoutMs = 15000;
 }
 
 EspManagerClient::EspManagerClient(const EspManagerConfig &cfg)
@@ -22,6 +27,7 @@ void EspManagerClient::begin() {
 
 	prefs_.begin(prefsNamespace, true);
 	password_ = prefs_.getString(prefsPasswordKey, "");
+	otaTarget_ = prefs_.getString(prefsOtaTargetKey, "");
 	prefs_.end();
 
 	mqtt_.setServer(cfg_.host, cfg_.mqttPort);
@@ -141,6 +147,7 @@ bool EspManagerClient::connectMQTT() {
 	mqtt_.publish(availability.c_str(), "online", true);
 	mqtt_.subscribe(topic("cmd/ota").c_str(), 1);
 	publishHeartbeat();
+	confirmOTA();
 	return true;
 }
 
@@ -155,6 +162,18 @@ void EspManagerClient::publishHeartbeat() {
 	lastHeartbeat_ = millis();
 }
 
+void EspManagerClient::confirmOTA() {
+	if (otaTarget_.length() == 0) {
+		return;
+	}
+	reportOTA(otaTarget_ == cfg_.firmwareVersion ? "ok" : "failed");
+
+	prefs_.begin(prefsNamespace, false);
+	prefs_.remove(prefsOtaTargetKey);
+	prefs_.end();
+	otaTarget_ = "";
+}
+
 void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned int length) {
 	if (topic("cmd/ota") != t) {
 		return;
@@ -165,14 +184,134 @@ void EspManagerClient::onMessage(const char *t, const uint8_t *payload, unsigned
 		return;
 	}
 
-	JsonDocument status;
-	status["status"] = "updating";
-	status["version"] = cmd["version"];
+	String version = cmd["version"].as<String>();
+	String url = cmd["url"].as<String>();
+	if (version.length() == 0 || url.length() == 0 || version == cfg_.firmwareVersion) {
+		return;
+	}
+	applyOTA(version, url, cmd["sha256"].as<String>(), cmd["signature"].as<String>());
+}
+
+void EspManagerClient::applyOTA(const String &targetVersion, const String &url, const String &sha256Hex, const String &signatureHex) {
+	uint8_t expectedSha[32];
+	uint8_t signature[64];
+	uint8_t publicKey[32];
+	if (!hexToBytes(sha256Hex, expectedSha, sizeof(expectedSha)) ||
+		!hexToBytes(signatureHex, signature, sizeof(signature)) ||
+		!hexToBytes(String(cfg_.signingPublicKeyHex), publicKey, sizeof(publicKey))) {
+		reportOTA("failed");
+		return;
+	}
+
+	reportOTA("updating");
+
+	HTTPClient http;
+	if (!http.begin(net_, url)) {
+		reportOTA("failed");
+		return;
+	}
+	if (http.GET() != HTTP_CODE_OK) {
+		http.end();
+		reportOTA("failed");
+		return;
+	}
+
+	int contentLen = http.getSize();
+	if (!Update.begin(contentLen > 0 ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN)) {
+		http.end();
+		reportOTA("failed");
+		return;
+	}
+
+	SHA256 sha;
+	sha.reset();
+	WiFiClient *stream = http.getStreamPtr();
+	uint8_t buf[1024];
+	size_t total = 0;
+	bool ok = true;
+	uint32_t idleDeadline = millis() + otaIdleTimeoutMs;
+
+	while (http.connected() && (contentLen < 0 || total < (size_t)contentLen)) {
+		size_t avail = stream->available();
+		if (avail == 0) {
+			if (millis() > idleDeadline) {
+				ok = false;
+				break;
+			}
+			delay(1);
+			continue;
+		}
+		idleDeadline = millis() + otaIdleTimeoutMs;
+		int n = stream->readBytes(buf, avail < sizeof(buf) ? avail : sizeof(buf));
+		if (n <= 0) {
+			continue;
+		}
+		if (Update.write(buf, n) != (size_t)n) {
+			ok = false;
+			break;
+		}
+		sha.update(buf, n);
+		total += n;
+	}
+	http.end();
+
+	if (!ok || (contentLen > 0 && total != (size_t)contentLen)) {
+		Update.abort();
+		reportOTA("failed");
+		return;
+	}
+
+	uint8_t digest[32];
+	sha.finalize(digest, sizeof(digest));
+	if (memcmp(digest, expectedSha, sizeof(digest)) != 0 ||
+		!Ed25519::verify(signature, publicKey, digest, sizeof(digest))) {
+		Update.abort();
+		reportOTA("failed");
+		return;
+	}
+
+	if (!Update.end(true)) {
+		reportOTA("failed");
+		return;
+	}
+
+	prefs_.begin(prefsNamespace, false);
+	prefs_.putString(prefsOtaTargetKey, targetVersion);
+	prefs_.end();
+
+	delay(200);
+	ESP.restart();
+}
+
+void EspManagerClient::reportOTA(const char *status) {
+	JsonDocument doc;
+	doc["status"] = status;
 	String out;
-	serializeJson(status, out);
+	serializeJson(doc, out);
 	mqtt_.publish(topic("ota/status").c_str(), out.c_str());
 }
 
 String EspManagerClient::topic(const char *suffix) const {
 	return String("espmanager/") + deviceID_ + "/" + suffix;
+}
+
+bool EspManagerClient::hexToBytes(const String &hex, uint8_t *out, size_t outLen) {
+	if (hex.length() != outLen * 2) {
+		return false;
+	}
+	auto nibble = [](char c) -> int {
+		if (c >= '0' && c <= '9') return c - '0';
+		if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+		return -1;
+	};
+	for (size_t i = 0; i < outLen; i++) {
+		int hi = nibble(hex[2 * i]);
+		int lo = nibble(hex[2 * i + 1]);
+		if (hi < 0 || lo < 0) {
+			return false;
+		}
+		out[i] = (uint8_t)((hi << 4) | lo);
+	}
+	return true;
 }
