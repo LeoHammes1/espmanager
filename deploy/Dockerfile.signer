@@ -4,10 +4,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/espmanager-signer ./cmd/espmanager-signer
+RUN mkdir /data
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/espmanager-signer /usr/local/bin/espmanager-signer
+COPY --from=build --chown=65532:65532 /data /app/data
 ENV ESPM_SIGNER_KEY=/app/data/signing.key
 EXPOSE 8090
 ENTRYPOINT ["espmanager-signer"]

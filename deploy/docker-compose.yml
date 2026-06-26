@@ -9,7 +9,8 @@ services:
     environment:
       ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:?set a strong ESPM_WORKER_TOKEN}
       ESPM_ADMIN_USER: ${ESPM_ADMIN_USER:-admin}
-      ESPM_ADMIN_PASSWORD: ${ESPM_ADMIN_PASSWORD:-}
+      ESPM_ADMIN_PASSWORD: ${ESPM_ADMIN_PASSWORD:?set a strong ESPM_ADMIN_PASSWORD}
+      ESPM_PUBLIC_URL: ${ESPM_PUBLIC_URL:-}
       ESPM_SIGNER_URL: http://signer:8090
       ESPM_SIGNER_TOKEN: ${ESPM_SIGNER_TOKEN:?set a strong ESPM_SIGNER_TOKEN}
     volumes:
@@ -17,6 +18,12 @@ services:
     depends_on:
       - signer
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    pids_limit: 256
 
   builder:
     build:
@@ -27,10 +34,17 @@ services:
       ESPM_WORKER_TOKEN: ${ESPM_WORKER_TOKEN:?set a strong ESPM_WORKER_TOKEN}
     volumes:
       - builder-data:/app/data
-      - platformio-cache:/root/.platformio
+      - platformio-cache:/home/builder/.platformio
     depends_on:
       - core
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 1024
 
   signer:
     build:
@@ -41,6 +55,12 @@ services:
     volumes:
       - signer-data:/app/data
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    pids_limit: 128
 
 volumes:
   core-data:

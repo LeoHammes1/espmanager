@@ -72,6 +72,20 @@ func output(ctx context.Context, dir, name string, args ...string) (string, erro
 func command(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL=http:https")
+	cmd.Env = buildEnv()
 	return cmd
+}
+
+// buildEnv strips ESPM_* secrets (notably the worker token) from the environment
+// handed to git, pio, and any repo-supplied PlatformIO extra_scripts, so an
+// untrusted firmware repo cannot read them.
+func buildEnv() []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "ESPM_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GIT_ALLOW_PROTOCOL=http:https")
 }
