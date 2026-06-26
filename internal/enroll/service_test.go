@@ -7,27 +7,30 @@ import (
 )
 
 type fakeRepo struct {
-	tokens      map[string]time.Time
+	tokens      map[string]Token
 	credentials map[string]Credentials
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{tokens: map[string]time.Time{}, credentials: map[string]Credentials{}}
+	return &fakeRepo{tokens: map[string]Token{}, credentials: map[string]Credentials{}}
 }
 
 func (r *fakeRepo) CreateToken(_ context.Context, t Token) error {
-	r.tokens[t.Value] = t.ExpiresAt
+	r.tokens[t.Value] = t
 	return nil
 }
 
-func (r *fakeRepo) TokenValid(_ context.Context, value string, now time.Time) (bool, error) {
-	exp, ok := r.tokens[value]
-	return ok && now.Before(exp), nil
+func (r *fakeRepo) tokenOK(value, deviceID string, now time.Time) bool {
+	t, ok := r.tokens[value]
+	return ok && now.Before(t.ExpiresAt) && (t.DeviceID == "" || t.DeviceID == deviceID)
+}
+
+func (r *fakeRepo) TokenValid(_ context.Context, value, deviceID string, now time.Time) (bool, error) {
+	return r.tokenOK(value, deviceID, now), nil
 }
 
 func (r *fakeRepo) Claim(_ context.Context, deviceID, token, passwordHash string, now time.Time) error {
-	exp, ok := r.tokens[token]
-	if !ok || !now.Before(exp) {
+	if !r.tokenOK(token, deviceID, now) {
 		return ErrInvalidToken
 	}
 	if _, exists := r.credentials[deviceID]; exists {
@@ -67,6 +70,49 @@ func (r *fakeRepo) PromotePending(_ context.Context, deviceID string) error {
 		r.credentials[deviceID] = c
 	}
 	return nil
+}
+
+func TestMintForBindsTokenToMAC(t *testing.T) {
+	svc := NewService(newFakeRepo(), 15*time.Minute)
+	tok, err := svc.MintFor(context.Background(), "AA:BB:CC:11:22:33")
+	if err != nil {
+		t.Fatalf("mintFor: %v", err)
+	}
+	if tok.DeviceID != "aabbcc112233" {
+		t.Fatalf("token should be bound to the normalized MAC, got %q", tok.DeviceID)
+	}
+
+	// A different device cannot use the bound token.
+	if _, err := svc.Claim(context.Background(), "ffeeddccbbaa", tok.Value); err != ErrInvalidToken {
+		t.Fatalf("bound token must reject a different device, got %v", err)
+	}
+	// The bound device can.
+	if _, err := svc.Claim(context.Background(), "aabbcc112233", tok.Value); err != nil {
+		t.Fatalf("bound device should claim, got %v", err)
+	}
+}
+
+func TestMintForRejectsInvalidMAC(t *testing.T) {
+	svc := NewService(newFakeRepo(), 15*time.Minute)
+	for _, bad := range []string{"", "xyz", "aabbcc", "gggggggggggg", "aabbcc11223344"} {
+		if _, err := svc.MintFor(context.Background(), bad); err != ErrInvalidMAC {
+			t.Fatalf("MintFor(%q) want ErrInvalidMAC, got %v", bad, err)
+		}
+	}
+}
+
+func TestMintUnboundClaimableByAnyDevice(t *testing.T) {
+	svc := NewService(newFakeRepo(), 15*time.Minute)
+	tok, err := svc.Mint(context.Background())
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	if tok.DeviceID != "" {
+		t.Fatalf("unbound token should have no device, got %q", tok.DeviceID)
+	}
+	if _, err := svc.Claim(context.Background(), "any-device-id", tok.Value); err != nil {
+		t.Fatalf("unbound token should be claimable by any device, got %v", err)
+	}
 }
 
 func TestClaimIssuesUsableCredentials(t *testing.T) {

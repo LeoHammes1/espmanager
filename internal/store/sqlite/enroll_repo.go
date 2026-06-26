@@ -17,22 +17,31 @@ func NewEnrollRepository(db *sql.DB) *EnrollRepository {
 	return &EnrollRepository{db: db}
 }
 
+// nullable maps an empty string to a SQL NULL so optional columns stay NULL
+// rather than an empty string (the `device_id is null` checks rely on it).
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func (r *EnrollRepository) CreateToken(ctx context.Context, t enroll.Token) error {
 	if _, err := r.db.ExecContext(ctx,
 		`delete from claim_tokens where expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ')`); err != nil {
 		return err
 	}
 	_, err := r.db.ExecContext(ctx,
-		`insert into claim_tokens (token, expires_at) values (?, ?)`,
-		t.Value, t.ExpiresAt.UTC().Format(timeFormat))
+		`insert into claim_tokens (token, expires_at, device_id) values (?, ?, ?)`,
+		t.Value, t.ExpiresAt.UTC().Format(timeFormat), nullable(t.DeviceID))
 	return err
 }
 
-func (r *EnrollRepository) TokenValid(ctx context.Context, value string, now time.Time) (bool, error) {
+func (r *EnrollRepository) TokenValid(ctx context.Context, value, deviceID string, now time.Time) (bool, error) {
 	var one int
 	err := r.db.QueryRowContext(ctx,
-		`select 1 from claim_tokens where token = ? and expires_at > ?`,
-		value, now.UTC().Format(timeFormat)).Scan(&one)
+		`select 1 from claim_tokens where token = ? and expires_at > ? and (device_id is null or device_id = ?)`,
+		value, now.UTC().Format(timeFormat), deviceID).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -52,7 +61,8 @@ func (r *EnrollRepository) Claim(ctx context.Context, deviceID, token, passwordH
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`delete from claim_tokens where token = ? and expires_at > ?`, token, ts)
+		`delete from claim_tokens where token = ? and expires_at > ? and (device_id is null or device_id = ?)`,
+		token, ts, deviceID)
 	if err != nil {
 		return err
 	}

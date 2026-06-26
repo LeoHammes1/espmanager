@@ -8,6 +8,9 @@ import (
 type Token struct {
 	Value     string
 	ExpiresAt time.Time
+	// DeviceID binds the token to a single device (MAC). Empty = unbound (any
+	// device may claim it — the manual fallback flow).
+	DeviceID string
 }
 
 type Credentials struct {
@@ -17,7 +20,7 @@ type Credentials struct {
 
 type Repository interface {
 	CreateToken(ctx context.Context, t Token) error
-	TokenValid(ctx context.Context, value string, now time.Time) (bool, error)
+	TokenValid(ctx context.Context, value, deviceID string, now time.Time) (bool, error)
 	Claim(ctx context.Context, deviceID, token, passwordHash string, now time.Time) error
 	Credentials(ctx context.Context, deviceID string) (Credentials, bool, error)
 	Revoke(ctx context.Context, deviceID string) (bool, error)

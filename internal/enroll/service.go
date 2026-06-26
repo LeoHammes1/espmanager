@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -14,12 +15,28 @@ import (
 var (
 	ErrInvalidToken    = errors.New("enroll: invalid or expired claim token")
 	ErrInvalidDevice   = errors.New("enroll: invalid device id")
+	ErrInvalidMAC      = errors.New("enroll: invalid device MAC")
 	ErrAlreadyEnrolled = errors.New("enroll: device already enrolled")
 	ErrNotEnrolled     = errors.New("enroll: device is not enrolled")
 	ErrRotationPending = errors.New("enroll: a credential rotation is already pending for this device")
 )
 
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
+
+// macPattern matches the canonical device_id the firmware derives from the WiFi
+// STA base MAC: 12 lowercase hex chars, no separators.
+var macPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+var macStripper = strings.NewReplacer(":", "", "-", "", ".", "", " ", "")
+
+// NormalizeMAC canonicalizes a MAC to the firmware's device_id form.
+func NormalizeMAC(raw string) (string, bool) {
+	mac := macStripper.Replace(strings.ToLower(strings.TrimSpace(raw)))
+	if !macPattern.MatchString(mac) {
+		return "", false
+	}
+	return mac, true
+}
 
 type Service struct {
 	repo Repository
@@ -31,12 +48,28 @@ func NewService(repo Repository, ttl time.Duration) *Service {
 	return &Service{repo: repo, ttl: ttl, now: time.Now}
 }
 
+// Mint issues an unbound claim token (the manual fallback flow — any device may
+// claim it).
 func (s *Service) Mint(ctx context.Context) (Token, error) {
+	return s.mint(ctx, "")
+}
+
+// MintFor issues a claim token bound to a single device MAC, so only that device
+// can claim it. Used by the browser onboarding wizard.
+func (s *Service) MintFor(ctx context.Context, mac string) (Token, error) {
+	deviceID, ok := NormalizeMAC(mac)
+	if !ok {
+		return Token{}, ErrInvalidMAC
+	}
+	return s.mint(ctx, deviceID)
+}
+
+func (s *Service) mint(ctx context.Context, deviceID string) (Token, error) {
 	value, err := id.New(24)
 	if err != nil {
 		return Token{}, err
 	}
-	t := Token{Value: value, ExpiresAt: s.now().UTC().Add(s.ttl)}
+	t := Token{Value: value, ExpiresAt: s.now().UTC().Add(s.ttl), DeviceID: deviceID}
 	if err := s.repo.CreateToken(ctx, t); err != nil {
 		return Token{}, err
 	}
@@ -49,7 +82,9 @@ func (s *Service) Claim(ctx context.Context, deviceID, token string) (string, er
 	}
 
 	now := s.now().UTC()
-	valid, err := s.repo.TokenValid(ctx, token, now)
+	// A MAC-bound token is only valid for its device; an unbound token is valid
+	// for any. A mismatch reads as simply invalid (no oracle on which tokens exist).
+	valid, err := s.repo.TokenValid(ctx, token, deviceID, now)
 	if err != nil {
 		return "", err
 	}

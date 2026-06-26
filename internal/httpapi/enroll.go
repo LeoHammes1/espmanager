@@ -17,6 +17,7 @@ import (
 
 type Enroller interface {
 	Mint(ctx context.Context) (enroll.Token, error)
+	MintFor(ctx context.Context, mac string) (enroll.Token, error)
 	Claim(ctx context.Context, deviceID, token string) (string, error)
 	Rotate(ctx context.Context, deviceID string) (string, error)
 	Revoke(ctx context.Context, deviceID string) error
@@ -30,10 +31,30 @@ type DeviceBus interface {
 
 func apiEnroll(enroller Enroller, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		t, err := enroller.Mint(r.Context())
+		// Body is optional: {"mac": "..."} binds the token to one device (wizard),
+		// no body mints an unbound token (manual fallback).
+		var req struct {
+			MAC string `json:"mac"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req)
+		}
+
+		var (
+			t   enroll.Token
+			err error
+		)
+		if req.MAC != "" {
+			t, err = enroller.MintFor(r.Context(), req.MAC)
+			if errors.Is(err, enroll.ErrInvalidMAC) {
+				apiErr(w, http.StatusBadRequest, "invalid_mac", "Invalid device MAC.")
+				return
+			}
+		} else {
+			t, err = enroller.Mint(r.Context())
+		}
 		if err != nil {
-			log.Error("mint claim token failed", "err", err)
-			apiErr(w, http.StatusInternalServerError, "internal", "Could not create a claim token.")
+			apiInternal(w, log, "mint claim token failed", err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, map[string]string{
