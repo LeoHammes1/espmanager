@@ -1,0 +1,16 @@
+{
+  "name": "ESPManager Agent",
+  "version": "1",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "/firmware/agent/esp32/bootloader.bin", "offset": 4096 },
+        { "path": "/firmware/agent/esp32/partition-table.bin", "offset": 32768 },
+        { "path": "/firmware/agent/esp32/ota-data.bin", "offset": 61440 },
+        { "path": "/firmware/agent/esp32/espmanager-agent.bin", "offset": 131072 }
+      ]
+    }
+  ]
+}

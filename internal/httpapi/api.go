@@ -42,6 +42,8 @@ func apiRouter(opts Options, guard *authGuard) http.Handler {
 	r.Group(func(pr chi.Router) {
 		pr.Use(guard.requireAPI)
 
+		pr.Get("/config", apiConfig(opts.Provision))
+
 		pr.Get("/overview", apiOverview(opts.Deploys, opts.Drivers, opts.Devices, opts.FailureThreshold, opts.Log))
 
 		pr.Get("/devices", apiDevices(opts.Devices, opts.Drivers, opts.Log))

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -122,6 +124,7 @@ func run(log *slog.Logger) error {
 		SecureCookies:    strings.HasPrefix(cfg.BrowserURL, "https://"),
 		FailureThreshold: cfg.FailureThreshold,
 		PublicURL:        cfg.PublicURL,
+		Provision:        provisionInfo(cfg),
 	})
 	if err != nil {
 		return err
@@ -194,6 +197,27 @@ func validatePublicURL(raw string) error {
 		return fmt.Errorf("invalid ESPM_PUBLIC_URL %q: must be an absolute http:// URL — devices fetch OTA over plain HTTP and cannot do TLS; put the browser's https origin on ESPM_BROWSER_URL", raw)
 	}
 	return nil
+}
+
+// provisionInfo derives the device-reachable manager address the onboarding
+// wizard writes into a device from the authoritative server config. PublicURL
+// (validated as http://) supplies host and HTTP port; the MQTT port comes from
+// the broker listen address. Host falls back to empty so the wizard can default
+// to the browser origin when PublicURL is unset.
+func provisionInfo(cfg config.Config) httpapi.ProvisionInfo {
+	info := httpapi.ProvisionInfo{HTTPPort: 80, MQTTPort: 1883}
+	if u, err := url.Parse(cfg.PublicURL); err == nil && u.Host != "" {
+		info.Host = u.Hostname()
+		if p, err := strconv.Atoi(u.Port()); err == nil && p > 0 {
+			info.HTTPPort = p
+		}
+	}
+	if _, port, err := net.SplitHostPort(cfg.MQTTAddr); err == nil {
+		if p, err := strconv.Atoi(port); err == nil && p > 0 {
+			info.MQTTPort = p
+		}
+	}
+	return info
 }
 
 func validateBrowserURL(raw string) error {

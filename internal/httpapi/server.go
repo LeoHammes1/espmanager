@@ -38,6 +38,15 @@ type DeployService interface {
 	Cancel(ctx context.Context, id string) error
 }
 
+// ProvisionInfo is the device-reachable manager address the onboarding wizard
+// writes into a device, derived from the server's authoritative configuration so
+// onboarding is correct regardless of how the browser reached the UI.
+type ProvisionInfo struct {
+	Host     string `json:"host"`
+	HTTPPort int    `json:"httpPort"`
+	MQTTPort int    `json:"mqttPort"`
+}
+
 type Options struct {
 	Devices          DeviceService
 	Drivers          DriverService
@@ -57,11 +66,18 @@ type Options struct {
 	SecureCookies    bool
 	FailureThreshold int
 	PublicURL        string
+	Provision        ProvisionInfo
 }
 
 func NewRouter(opts Options) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+
+	agentFW, err := agentFirmware()
+	if err != nil {
+		return nil, err
+	}
+	r.Handle("/firmware/agent/*", agentFW)
 
 	if opts.Webhook != nil {
 		r.Post("/webhook/git/{driverID}", opts.Webhook.ServeHTTP)

@@ -11,6 +11,13 @@ export interface ErrorResponse {
   message?: string;
 }
 
+// Device-reachable manager address used to provision a device during onboarding.
+export interface ProvisionConfig {
+  host: string;
+  httpPort: number;
+  mqttPort: number;
+}
+
 // ---- Devices ----
 export interface Device {
   id: string;

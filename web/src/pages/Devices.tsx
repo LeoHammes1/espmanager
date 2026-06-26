@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
-import type { Device, DevicesResponse, DriverOption, EnrollResponse, RotateResponse } from "@/lib/types";
+import type { Device, DevicesResponse, DriverOption, RotateResponse } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +33,7 @@ import { RelTime } from "@/components/common/RelTime";
 import { EmptyState } from "@/components/common/EmptyState";
 import { RevealDialog } from "@/components/common/RevealDialog";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { AddDeviceWizard } from "@/components/devices/AddDeviceWizard";
 
 const UNASSIGNED = "__none__";
 
@@ -172,21 +173,15 @@ export function Devices() {
     queryKey: ["devices"],
     queryFn: () => api.get<DevicesResponse>("/api/devices"),
   });
-  const [enrolled, setEnrolled] = useState<EnrollResponse | null>(null);
-
-  const enroll = useMutation({
-    mutationFn: () => api.post<EnrollResponse>("/api/devices/enroll"),
-    onSuccess: setEnrolled,
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Enroll failed."),
-  });
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   return (
     <Card>
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <h2 className="text-sm font-medium">Devices</h2>
         <span className="text-xs text-muted-foreground">{data?.devices.length ?? 0} total</span>
-        <Button className="ml-auto" size="sm" disabled={enroll.isPending} onClick={() => enroll.mutate()}>
-          Enroll device
+        <Button className="ml-auto" size="sm" onClick={() => setWizardOpen(true)}>
+          Add device
         </Button>
       </div>
 
@@ -215,18 +210,12 @@ export function Devices() {
         </Table>
       ) : (
         <EmptyState title="No devices yet">
-          Enroll a device to mint a claim token, then flash it — it adopts its credential over MQTT
-          and appears here.
+          Add a device over USB — the browser flashes it and provisions WiFi and credentials — and
+          it appears here once it connects.
         </EmptyState>
       )}
 
-      <RevealDialog
-        open={enrolled !== null}
-        onOpenChange={(o) => !o && setEnrolled(null)}
-        title="Device enrolled"
-        description={enrolled ? `Claim token expires ${new Date(enrolled.expiresAt).toLocaleString()}.` : undefined}
-        value={enrolled?.token ?? ""}
-      />
+      <AddDeviceWizard open={wizardOpen} onOpenChange={setWizardOpen} />
     </Card>
   );
 }
