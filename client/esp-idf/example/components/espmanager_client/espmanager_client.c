@@ -24,6 +24,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sodium.h"
+#include "driver/uart.h"
+#include "esp_system.h"
 
 static const char *TAG = "espmanager";
 
@@ -34,6 +36,13 @@ static const char *TAG = "espmanager";
 #define KEY_PENDSEQ "otapendseq"
 #define KEY_FLOOR "otaseq"
 #define KEY_FAILEDSEQ "otafailseq"
+// Provisioning config written over serial by the browser wizard.
+#define KEY_WSSID "wssid"
+#define KEY_WPASS "wpass"
+#define KEY_HOST "host"
+#define KEY_HPORT "hport"
+#define KEY_MPORT "mport"
+#define KEY_CTOK "ctok"
 #define WIFI_CONNECTED_BIT BIT0
 
 typedef struct {
@@ -60,6 +69,13 @@ static QueueHandle_t s_ota_queue;
 static SemaphoreHandle_t s_connected_sem;
 static volatile bool s_awaiting_confirm;
 static volatile bool s_report_rollback_failed;
+
+// Owned copies of the connection config: seeded from the compile-time
+// espmanager_config_t, then overridden by anything the wizard wrote to NVS.
+static char s_ssid[33];
+static char s_pass[65];
+static char s_host[80];
+static char s_token[64];
 
 static void nvs_init_safe(void) {
 	esp_err_t err = nvs_flash_init();
@@ -625,6 +641,129 @@ static void mqtt_start(void) {
 	esp_mqtt_client_start(s_mqtt);
 }
 
+// resolve_config seeds the live connection config from the compile-time defaults
+// and lets any value the wizard wrote to NVS override it. The signing pubkey is
+// never NVS-overridable — it stays the compile-time trust anchor.
+static void resolve_config(const espmanager_config_t *cfg) {
+	strlcpy(s_ssid, cfg->wifi_ssid ? cfg->wifi_ssid : "", sizeof(s_ssid));
+	strlcpy(s_pass, cfg->wifi_password ? cfg->wifi_password : "", sizeof(s_pass));
+	strlcpy(s_host, cfg->host ? cfg->host : "", sizeof(s_host));
+	strlcpy(s_token, cfg->claim_token ? cfg->claim_token : "", sizeof(s_token));
+
+	char tmp[96];
+	nvs_load_str(KEY_WSSID, tmp, sizeof(tmp));
+	if (tmp[0]) strlcpy(s_ssid, tmp, sizeof(s_ssid));
+	nvs_load_str(KEY_WPASS, tmp, sizeof(tmp));
+	if (tmp[0]) strlcpy(s_pass, tmp, sizeof(s_pass));
+	nvs_load_str(KEY_HOST, tmp, sizeof(tmp));
+	if (tmp[0]) strlcpy(s_host, tmp, sizeof(s_host));
+	nvs_load_str(KEY_CTOK, tmp, sizeof(tmp));
+	if (tmp[0]) strlcpy(s_token, tmp, sizeof(s_token));
+
+	uint64_t hp = nvs_load_u64(KEY_HPORT);
+	uint64_t mp = nvs_load_u64(KEY_MPORT);
+	if (hp > 0 && hp <= 65535) s_cfg.http_port = (uint16_t)hp;
+	if (mp > 0 && mp <= 65535) s_cfg.mqtt_port = (uint16_t)mp;
+
+	s_cfg.wifi_ssid = s_ssid;
+	s_cfg.wifi_password = s_pass;
+	s_cfg.host = s_host;
+	s_cfg.claim_token = s_token;
+}
+
+static void agent_send(const char *line) {
+	uart_write_bytes(UART_NUM_0, line, strlen(line));
+}
+
+// provision_agent is the serial onboarding channel the browser wizard drives over
+// USB when the device is unprovisioned. Line protocol on UART0 (logging muted so
+// the stream is clean):
+//   <- ESPM:READY <mac>          (on entry; also answer to ESPM:GETMAC)
+//   -> ESPM:SET <key> <value>    (ssid|pass|host|token|hport|mport) -> ESPM:OK
+//   -> ESPM:PROVISION            (commit to NVS + reboot) -> ESPM:OK PROVISIONED
+static void provision_agent(void) {
+	esp_log_level_set("*", ESP_LOG_NONE);
+	uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0);
+
+	char ssid[33] = "", pass[65] = "", host[80] = "", token[64] = "";
+	uint16_t hport = s_cfg.http_port, mport = s_cfg.mqtt_port;
+
+	char ready[40];
+	snprintf(ready, sizeof(ready), "ESPM:READY %s\n", s_device_id);
+	agent_send(ready);
+
+	char line[200];
+	int len = 0;
+	for (;;) {
+		uint8_t ch;
+		if (uart_read_bytes(UART_NUM_0, &ch, 1, portMAX_DELAY) != 1) continue;
+		if (ch == '\r') continue;
+		if (ch != '\n') {
+			if (len < (int)sizeof(line) - 1) line[len++] = (char)ch;
+			continue;
+		}
+		line[len] = '\0';
+		len = 0;
+		if (strncmp(line, "ESPM:", 5) != 0) continue;
+		char *cmd = line + 5;
+
+		if (strcmp(cmd, "GETMAC") == 0) {
+			agent_send(ready);
+		} else if (strncmp(cmd, "SET ", 4) == 0) {
+			char *kv = cmd + 4;
+			char *sp = strchr(kv, ' ');
+			char *val = "";
+			if (sp) {
+				*sp = '\0';
+				val = sp + 1;
+			}
+			if (strcmp(kv, "ssid") == 0) strlcpy(ssid, val, sizeof(ssid));
+			else if (strcmp(kv, "pass") == 0) strlcpy(pass, val, sizeof(pass));
+			else if (strcmp(kv, "host") == 0) strlcpy(host, val, sizeof(host));
+			else if (strcmp(kv, "token") == 0) strlcpy(token, val, sizeof(token));
+			else if (strcmp(kv, "hport") == 0 || strcmp(kv, "mport") == 0) {
+				char *end;
+				long p = strtol(val, &end, 10);
+				if (*val == '\0' || *end != '\0' || p < 1 || p > 65535) {
+					agent_send("ESPM:ERR port\n");
+					continue;
+				}
+				if (kv[0] == 'h') hport = (uint16_t)p;
+				else mport = (uint16_t)p;
+			} else {
+				agent_send("ESPM:ERR key\n");
+				continue;
+			}
+			agent_send("ESPM:OK\n");
+		} else if (strcmp(cmd, "PROVISION") == 0) {
+			if (ssid[0] == '\0' || host[0] == '\0' || token[0] == '\0') {
+				agent_send("ESPM:ERR incomplete\n");
+				continue;
+			}
+			nvs_store_str(KEY_WSSID, ssid);
+			nvs_store_str(KEY_WPASS, pass);
+			nvs_store_str(KEY_HOST, host);
+			nvs_store_str(KEY_CTOK, token);
+			nvs_store_u64(KEY_HPORT, hport);
+			nvs_store_u64(KEY_MPORT, mport);
+			// Re-onboarding must start clean: drop any prior manager's credential
+			// and OTA anti-downgrade state so the device re-claims and accepts the
+			// new manager's sequence floor.
+			nvs_clear(KEY_PASS);
+			nvs_clear(KEY_OLDPASS);
+			nvs_clear(KEY_FLOOR);
+			nvs_clear(KEY_FAILEDSEQ);
+			nvs_clear(KEY_TARGET);
+			nvs_clear(KEY_PENDSEQ);
+			agent_send("ESPM:OK PROVISIONED\n");
+			vTaskDelay(pdMS_TO_TICKS(250));
+			esp_restart();
+		} else {
+			agent_send("ESPM:ERR cmd\n");
+		}
+	}
+}
+
 void espmanager_start(const espmanager_config_t *cfg) {
 	s_cfg = *cfg;
 	if (s_cfg.heartbeat_interval_ms == 0) {
@@ -641,6 +780,17 @@ void espmanager_start(const espmanager_config_t *cfg) {
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
 	compute_device_id();
+	resolve_config(cfg);
+
+	// Unprovisioned (no WiFi from NVS or compile-time): hand the serial port to
+	// the browser wizard. provision_agent reboots into the normal path once the
+	// operator commits, so it never returns.
+	if (s_cfg.wifi_ssid[0] == '\0') {
+		ESP_LOGI(TAG, "device %s unprovisioned; starting serial provisioning agent", s_device_id);
+		provision_agent();
+		return;
+	}
+
 	ESP_LOGI(TAG, "device %s firmware %s", s_device_id, s_cfg.firmware_version);
 
 	nvs_load_str(KEY_PASS, s_password, sizeof(s_password));

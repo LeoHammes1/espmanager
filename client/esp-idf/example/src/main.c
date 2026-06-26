@@ -6,7 +6,7 @@ void app_main(void) {
 		.wifi_ssid = WIFI_SSID,
 		.wifi_password = WIFI_PASS,
 		.host = ESPM_HOST,
-		.http_port = 8080,
+		.http_port = 80,
 		.mqtt_port = 1883,
 		.claim_token = ESPM_CLAIM_TOKEN,
 		.firmware_version = "idf-1.0.0",
