@@ -36,8 +36,10 @@
 <aside class="sidebar">
   <div class="brand"><span class="brand-mark">E</span> ESPManager</div>
   <nav>
+    <a href="/"{{if eq .Nav "overview"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">◰</span> Overview</a>
     <a href="/devices"{{if eq .Nav "devices"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">▤</span> Devices</a>
     <a href="/drivers"{{if eq .Nav "drivers"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">◇</span> Drivers</a>
+    <a href="/deploys"{{if eq .Nav "deploys"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">⟰</span> Deploys</a>
   </nav>
   <div class="sidebar-foot">
     <span class="livedot" data-state="connecting"><span data-live-label>Reconnecting</span></span>

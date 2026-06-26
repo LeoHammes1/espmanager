@@ -83,18 +83,41 @@ func (r *DeployRepository) ListActiveDeploys(ctx context.Context) ([]deploy.Depl
 	}
 	defer rows.Close()
 
-	var out []deploy.Deploy
-	for rows.Next() {
-		var d deploy.Deploy
-		var state, createdAt string
-		if err := rows.Scan(&d.ID, &d.DriverID, &d.Version, &state, &createdAt); err != nil {
-			return nil, err
-		}
-		d.State = deploy.State(state)
-		d.CreatedAt, _ = time.Parse(timeFormat, createdAt)
-		out = append(out, d)
+	return scanDeploys(rows)
+}
+
+func (r *DeployRepository) ListDeploys(ctx context.Context) ([]deploy.Deploy, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`select id, driver_id, version, state, created_at from deploys order by created_at desc`)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	defer rows.Close()
+	return scanDeploys(rows)
+}
+
+func (r *DeployRepository) GetDeploy(ctx context.Context, deployID string) (deploy.Deploy, bool, error) {
+	row := r.db.QueryRowContext(ctx,
+		`select id, driver_id, version, state, created_at from deploys where id = ?`, deployID)
+	d, err := scanDeploy(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return deploy.Deploy{}, false, nil
+	}
+	if err != nil {
+		return deploy.Deploy{}, false, err
+	}
+	return d, true, nil
+}
+
+func (r *DeployRepository) ResetFailedTargets(ctx context.Context, deployID string, at time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		update deploy_targets set status = 'pending', updated_at = ?
+		where deploy_id = ? and status in ('failed', 'lost')`,
+		at.UTC().Format(timeFormat), deployID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (r *DeployRepository) TargetsForDeploy(ctx context.Context, deployID string) ([]deploy.Target, error) {
@@ -121,6 +144,29 @@ func (r *DeployRepository) SetDeployState(ctx context.Context, deployID string, 
 	_, err := r.db.ExecContext(ctx,
 		`update deploys set state = ? where id = ?`, string(state), deployID)
 	return err
+}
+
+func scanDeploys(rows *sql.Rows) ([]deploy.Deploy, error) {
+	var out []deploy.Deploy
+	for rows.Next() {
+		d, err := scanDeploy(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func scanDeploy(s rowScanner) (deploy.Deploy, error) {
+	var d deploy.Deploy
+	var state, createdAt string
+	if err := s.Scan(&d.ID, &d.DriverID, &d.Version, &state, &createdAt); err != nil {
+		return deploy.Deploy{}, err
+	}
+	d.State = deploy.State(state)
+	d.CreatedAt, _ = time.Parse(timeFormat, createdAt)
+	return d, nil
 }
 
 func scanTarget(s rowScanner) (deploy.Target, error) {

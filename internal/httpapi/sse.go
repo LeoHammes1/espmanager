@@ -14,7 +14,9 @@ func NewSSEHub() *SSEHub {
 	return &SSEHub{clients: make(map[chan struct{}]struct{})}
 }
 
-func (h *SSEHub) DeviceChanged() {
+// Changed signals every connected client to re-fetch its live regions. One
+// generic tick is enough: the UI re-pulls all [data-live] partials on any change.
+func (h *SSEHub) Changed() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for ch := range h.clients {

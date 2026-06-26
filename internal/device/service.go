@@ -47,7 +47,7 @@ func (s *Service) Assign(ctx context.Context, id, driverID string) error {
 	if err := s.repo.Assign(ctx, id, driverID); err != nil {
 		return err
 	}
-	s.notifier.DeviceChanged()
+	s.notifier.Changed()
 	return nil
 }
 
@@ -72,5 +72,5 @@ func (s *Service) apply(id string, err error) {
 		s.log.Error("device update failed", "device", id, "err", err)
 		return
 	}
-	s.notifier.DeviceChanged()
+	s.notifier.Changed()
 }

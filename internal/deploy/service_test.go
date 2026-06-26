@@ -96,6 +96,33 @@ func (r *fakeRepo) SetDeployState(_ context.Context, deployID string, state Stat
 	return nil
 }
 
+func (r *fakeRepo) ListDeploys(_ context.Context) ([]Deploy, error) {
+	out := make([]Deploy, 0, len(r.deploys))
+	for _, d := range r.deploys {
+		out = append(out, *d)
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) GetDeploy(_ context.Context, deployID string) (Deploy, bool, error) {
+	if d, ok := r.deploys[deployID]; ok {
+		return *d, true, nil
+	}
+	return Deploy{}, false, nil
+}
+
+func (r *fakeRepo) ResetFailedTargets(_ context.Context, deployID string, at time.Time) (int64, error) {
+	var n int64
+	for i := range r.targets {
+		if r.targets[i].DeployID == deployID && (r.targets[i].Status == StatusFailed || r.targets[i].Status == StatusLost) {
+			r.targets[i].Status = StatusPending
+			r.targets[i].UpdatedAt = at
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (r *fakeRepo) statusOf(deviceID string) Status {
 	for _, t := range r.targets {
 		if t.DeviceID == deviceID {
@@ -128,9 +155,92 @@ func (f fakeArtifacts) Get(_ context.Context, _, _ string) (artifact.Artifact, e
 	return f.a, nil
 }
 
+type fakeNotifier struct{ count int }
+
+func (f *fakeNotifier) Changed() { f.count++ }
+
 func newService(repo Repository, pub Publisher, devices DeviceSource, baseURL string, opts Options) *Service {
 	art := fakeArtifacts{a: artifact.Artifact{SHA256: "abc", Signature: "sig", Sequence: 1}}
-	return NewService(repo, devices, art, pub, baseURL, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewService(repo, devices, art, pub, &fakeNotifier{}, baseURL, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func TestBatchTripped(t *testing.T) {
+	cases := []struct {
+		name      string
+		targets   []Target
+		threshold int
+		want      bool
+	}{
+		{"all terminal over threshold", []Target{{Status: StatusFailed}, {Status: StatusSucceeded}, {Status: StatusSucceeded}}, 20, true},
+		{"all terminal under threshold", []Target{{Status: StatusSucceeded}, {Status: StatusSucceeded}, {Status: StatusSucceeded}}, 20, false},
+		{"not all terminal", []Target{{Status: StatusFailed}, {Status: StatusTriggered}}, 20, false},
+		{"lost counts as failure", []Target{{Status: StatusLost}}, 20, true},
+		{"empty", nil, 20, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := BatchTripped(tc.targets, tc.threshold); got != tc.want {
+				t.Fatalf("BatchTripped = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCancelStopsActiveDeploy(t *testing.T) {
+	repo := newFakeRepo()
+	repo.deploys["d1"] = &Deploy{ID: "d1", State: StateInProgress}
+	s := newService(repo, &fakePublisher{sent: map[string][]byte{}}, fakeDevices{}, "http://x", Options{})
+
+	if err := s.Cancel(context.Background(), "d1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if repo.deploys["d1"].State != StateCancelled {
+		t.Fatalf("want cancelled, got %s", repo.deploys["d1"].State)
+	}
+}
+
+func TestCancelRejectsTerminalDeploy(t *testing.T) {
+	repo := newFakeRepo()
+	repo.deploys["d1"] = &Deploy{ID: "d1", State: StateCompleted}
+	s := newService(repo, &fakePublisher{sent: map[string][]byte{}}, fakeDevices{}, "http://x", Options{})
+
+	if err := s.Cancel(context.Background(), "d1"); !errors.Is(err, ErrNotCancellable) {
+		t.Fatalf("want ErrNotCancellable, got %v", err)
+	}
+}
+
+func TestResumeRequiresPaused(t *testing.T) {
+	repo := newFakeRepo()
+	repo.deploys["d1"] = &Deploy{ID: "d1", State: StateInProgress}
+	s := newService(repo, &fakePublisher{sent: map[string][]byte{}}, fakeDevices{}, "http://x", Options{})
+
+	if err := s.Resume(context.Background(), "d1"); !errors.Is(err, ErrNotPaused) {
+		t.Fatalf("want ErrNotPaused, got %v", err)
+	}
+}
+
+func TestResumeRetriesFailedTargets(t *testing.T) {
+	repo := newFakeRepo()
+	repo.deploys["d1"] = &Deploy{ID: "d1", State: StatePaused}
+	repo.targets = []Target{
+		{DeployID: "d1", DeviceID: "a", Status: StatusFailed},
+		{DeployID: "d1", DeviceID: "b", Status: StatusLost},
+		{DeployID: "d1", DeviceID: "c", Status: StatusSucceeded},
+	}
+	s := newService(repo, &fakePublisher{sent: map[string][]byte{}}, fakeDevices{}, "http://x", Options{})
+
+	if err := s.Resume(context.Background(), "d1"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if repo.deploys["d1"].State != StateInProgress {
+		t.Fatalf("want in_progress, got %s", repo.deploys["d1"].State)
+	}
+	if repo.statusOf("a") != StatusPending || repo.statusOf("b") != StatusPending {
+		t.Fatal("failed and lost targets should be reset to pending")
+	}
+	if repo.statusOf("c") != StatusSucceeded {
+		t.Fatal("succeeded target must not be touched")
+	}
 }
 
 func TestRolloutTriggersOnlyCanaryBatch(t *testing.T) {

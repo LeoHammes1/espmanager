@@ -34,7 +34,7 @@ type Repository interface {
 }
 
 type Notifier interface {
-	DeviceChanged()
+	Changed()
 }
 
 type DriverChecker interface {

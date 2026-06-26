@@ -16,8 +16,11 @@ import (
 )
 
 var (
-	ErrNoPublicURL   = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
-	ErrStaleArtifact = errors.New("deploy: artifact predates the signed-sequence scheme; re-publish to deploy")
+	ErrNoPublicURL    = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
+	ErrStaleArtifact  = errors.New("deploy: artifact predates the signed-sequence scheme; re-publish to deploy")
+	ErrDeployNotFound = errors.New("deploy: not found")
+	ErrNotPaused      = errors.New("deploy: only a paused deploy can be resumed")
+	ErrNotCancellable = errors.New("deploy: only an active or paused deploy can be cancelled")
 )
 
 const resendGracePeriod = 90 * time.Second
@@ -33,13 +36,14 @@ type Service struct {
 	devices   DeviceSource
 	artifacts ArtifactSource
 	publisher Publisher
+	notifier  Notifier
 	baseURL   string
 	opts      Options
 	log       *slog.Logger
 	now       func() time.Time
 }
 
-func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource, publisher Publisher, baseURL string, opts Options, log *slog.Logger) *Service {
+func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource, publisher Publisher, notifier Notifier, baseURL string, opts Options, log *slog.Logger) *Service {
 	if opts.CanaryPercent <= 0 || opts.CanaryPercent > 100 {
 		opts.CanaryPercent = 100
 	}
@@ -56,10 +60,17 @@ func NewService(repo Repository, devices DeviceSource, artifacts ArtifactSource,
 		devices:   devices,
 		artifacts: artifacts,
 		publisher: publisher,
+		notifier:  notifier,
 		baseURL:   baseURL,
 		opts:      opts,
 		log:       log,
 		now:       time.Now,
+	}
+}
+
+func (s *Service) notify() {
+	if s.notifier != nil {
+		s.notifier.Changed()
 	}
 }
 
@@ -129,7 +140,74 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 	for _, deviceID := range canary {
 		errs = append(errs, s.trigger(ctx, d.ID, deviceID, cmd))
 	}
+	s.notify()
 	return errors.Join(errs...)
+}
+
+func (s *Service) ListDeploys(ctx context.Context) ([]Deploy, error) {
+	return s.repo.ListDeploys(ctx)
+}
+
+func (s *Service) Targets(ctx context.Context, deployID string) ([]Target, error) {
+	return s.repo.TargetsForDeploy(ctx, deployID)
+}
+
+func (s *Service) DeployDetail(ctx context.Context, deployID string) (Deploy, []Target, error) {
+	d, found, err := s.repo.GetDeploy(ctx, deployID)
+	if err != nil {
+		return Deploy{}, nil, err
+	}
+	if !found {
+		return Deploy{}, nil, ErrDeployNotFound
+	}
+	targets, err := s.repo.TargetsForDeploy(ctx, deployID)
+	if err != nil {
+		return Deploy{}, nil, err
+	}
+	return d, targets, nil
+}
+
+// Resume retries the failed and lost targets of a paused deploy; the reconcile
+// loop then re-triggers them and continues the rollout from where it stalled.
+func (s *Service) Resume(ctx context.Context, deployID string) error {
+	d, found, err := s.repo.GetDeploy(ctx, deployID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrDeployNotFound
+	}
+	if d.State != StatePaused {
+		return ErrNotPaused
+	}
+	if _, err := s.repo.ResetFailedTargets(ctx, deployID, s.now().UTC()); err != nil {
+		return err
+	}
+	if err := s.repo.SetDeployState(ctx, deployID, StateInProgress); err != nil {
+		return err
+	}
+	s.notify()
+	return nil
+}
+
+// Cancel abandons an active or paused deploy; untriggered targets stay pending
+// and are never sent.
+func (s *Service) Cancel(ctx context.Context, deployID string) error {
+	d, found, err := s.repo.GetDeploy(ctx, deployID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrDeployNotFound
+	}
+	if d.State != StateInProgress && d.State != StatePaused {
+		return ErrNotCancellable
+	}
+	if err := s.repo.SetDeployState(ctx, deployID, StateCancelled); err != nil {
+		return err
+	}
+	s.notify()
+	return nil
 }
 
 func (s *Service) Reconcile(ctx context.Context) {
@@ -162,6 +240,7 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 			}
 			if n > 0 {
 				t.Status = StatusLost
+				s.notify()
 			}
 			continue
 		}
@@ -180,8 +259,8 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 		}
 	}
 
-	for _, batch := range sortedBatches(targets) {
-		group := filterBatch(targets, batch)
+	for _, batch := range Batches(targets) {
+		group := TargetsInBatch(targets, batch)
 		if allTerminal(group) {
 			if failureExceeded(group, s.opts.FailureThreshold) {
 				s.setState(ctx, d.ID, StatePaused)
@@ -206,6 +285,7 @@ func (s *Service) promote(ctx context.Context, d Deploy, pending []Target) {
 	for _, t := range pending {
 		_ = s.trigger(ctx, d.ID, t.DeviceID, cmd)
 	}
+	s.notify()
 }
 
 func (s *Service) reconcileCommand(ctx context.Context, d Deploy) []byte {
@@ -236,7 +316,9 @@ func (s *Service) trigger(ctx context.Context, deployID, deviceID string, cmd []
 func (s *Service) setState(ctx context.Context, deployID string, state State) {
 	if err := s.repo.SetDeployState(ctx, deployID, state); err != nil {
 		s.log.Error("set deploy state failed", "deploy", deployID, "state", state, "err", err)
+		return
 	}
+	s.notify()
 }
 
 func (s *Service) command(driverID, version string, a artifact.Artifact) ([]byte, error) {
@@ -274,8 +356,13 @@ func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte)
 	// late or duplicated report can never mutate an unrelated deploy. Clients that
 	// do not report a sequence fall back to the most recent target.
 	if sequence > 0 {
-		if _, err := s.repo.AdvanceTargetStatusBySequence(ctx, deviceID, sequence, status, now); err != nil {
+		n, err := s.repo.AdvanceTargetStatusBySequence(ctx, deviceID, sequence, status, now)
+		if err != nil {
 			s.log.Error("advance deploy target failed", "device", deviceID, "err", err)
+			return
+		}
+		if n > 0 {
+			s.notify()
 		}
 		return
 	}
@@ -288,8 +375,13 @@ func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte)
 	if !found {
 		return
 	}
-	if _, err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, now); err != nil {
+	n, err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, now)
+	if err != nil {
 		s.log.Error("advance deploy target failed", "device", deviceID, "err", err)
+		return
+	}
+	if n > 0 {
+		s.notify()
 	}
 }
 
@@ -320,7 +412,9 @@ func mapStatus(reported string) Status {
 	}
 }
 
-func sortedBatches(targets []Target) []int {
+// Batches returns the distinct batch numbers present, in ascending order
+// (batch 0 is the canary).
+func Batches(targets []Target) []int {
 	seen := map[int]bool{}
 	var out []int
 	for _, t := range targets {
@@ -337,7 +431,8 @@ func sortedBatches(targets []Target) []int {
 	return out
 }
 
-func filterBatch(targets []Target, batch int) []Target {
+// TargetsInBatch returns the targets belonging to a batch.
+func TargetsInBatch(targets []Target, batch int) []Target {
 	var out []Target
 	for _, t := range targets {
 		if t.Batch == batch {
@@ -345,6 +440,13 @@ func filterBatch(targets []Target, batch int) []Target {
 		}
 	}
 	return out
+}
+
+// BatchTripped reports whether a batch has fully settled with its failure rate
+// over the threshold — the exact condition the reconcile loop pauses on, exposed
+// so the UI can explain a pause without re-deriving the rule.
+func BatchTripped(targets []Target, thresholdPercent int) bool {
+	return allTerminal(targets) && failureExceeded(targets, thresholdPercent)
 }
 
 func filterPending(targets []Target) []Target {

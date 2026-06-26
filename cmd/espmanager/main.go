@@ -86,7 +86,7 @@ func run(log *slog.Logger) error {
 	defer broker.Close()
 	log.Info("mqtt broker listening", "addr", cfg.MQTTAddr)
 
-	deploySvc := deploy.NewService(sqlitestore.NewDeployRepository(db), deviceSvc, artifactSvc, broker, cfg.PublicURL,
+	deploySvc := deploy.NewService(sqlitestore.NewDeployRepository(db), deviceSvc, artifactSvc, broker, hub, cfg.PublicURL,
 		deploy.Options{
 			CanaryPercent:    cfg.CanaryPercent,
 			FailureThreshold: cfg.FailureThreshold,
@@ -103,22 +103,24 @@ func run(log *slog.Logger) error {
 	}
 
 	router, err := httpapi.NewRouter(httpapi.Options{
-		Devices:       deviceSvc,
-		Drivers:       driverSvc,
-		Artifacts:     artifactSvc,
-		Deployer:      deploySvc,
-		Enroller:      enrollSvc,
-		Bus:           broker,
-		Hub:           hub,
-		Templates:     tmpl,
-		Queue:         jobs,
-		Webhook:       webhook.NewHandler(driverSvc, jobs, log),
-		Sessions:      sqlitestore.NewSessionRepository(db),
-		Log:           log,
-		WorkerToken:   cfg.WorkerToken,
-		AdminUser:     cfg.AdminUser,
-		AdminPassword: cfg.AdminPassword,
-		SecureCookies: strings.HasPrefix(cfg.PublicURL, "https://"),
+		Devices:          deviceSvc,
+		Drivers:          driverSvc,
+		Artifacts:        artifactSvc,
+		Deployer:         deploySvc,
+		Deploys:          deploySvc,
+		Enroller:         enrollSvc,
+		Bus:              broker,
+		Hub:              hub,
+		Templates:        tmpl,
+		Queue:            jobs,
+		Webhook:          webhook.NewHandler(driverSvc, jobs, log),
+		Sessions:         sqlitestore.NewSessionRepository(db),
+		Log:              log,
+		WorkerToken:      cfg.WorkerToken,
+		AdminUser:        cfg.AdminUser,
+		AdminPassword:    cfg.AdminPassword,
+		SecureCookies:    strings.HasPrefix(cfg.PublicURL, "https://"),
+		FailureThreshold: cfg.FailureThreshold,
 	})
 	if err != nil {
 		return err

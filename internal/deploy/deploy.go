@@ -24,6 +24,7 @@ const (
 	StateInProgress State = "in_progress"
 	StatePaused     State = "paused"
 	StateCompleted  State = "completed"
+	StateCancelled  State = "cancelled"
 )
 
 type Deploy struct {
@@ -51,12 +52,20 @@ type Repository interface {
 	AdvanceTargetStatusBySequence(ctx context.Context, deviceID string, sequence int64, status Status, at time.Time) (int64, error)
 	LatestTargetForDevice(ctx context.Context, deviceID string) (Target, bool, error)
 	ListActiveDeploys(ctx context.Context) ([]Deploy, error)
+	ListDeploys(ctx context.Context) ([]Deploy, error)
+	GetDeploy(ctx context.Context, deployID string) (Deploy, bool, error)
 	TargetsForDeploy(ctx context.Context, deployID string) ([]Target, error)
 	SetDeployState(ctx context.Context, deployID string, state State) error
+	ResetFailedTargets(ctx context.Context, deployID string, at time.Time) (int64, error)
 }
 
 type Publisher interface {
 	Publish(topic string, payload []byte) error
+}
+
+// Notifier is signalled whenever deploy state changes so the UI can refresh.
+type Notifier interface {
+	Changed()
 }
 
 type DeviceSource interface {

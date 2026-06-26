@@ -1,0 +1,82 @@
+{{define "page-overview"}}
+<div data-live hx-get="/partials/overview" hx-trigger="refresh" hx-swap="innerHTML">
+  {{template "overview-body" .}}
+</div>
+{{end}}
+
+{{define "overview-body"}}
+<div class="stats">
+  <a class="stat" href="/devices">
+    <div class="label">Devices online</div>
+    <div class="value">{{.DevicesOnline}} <small>/ {{.DevicesTotal}}</small></div>
+  </a>
+  <a class="stat" href="#attention" data-attention="{{if .AttentionCount}}true{{else}}false{{end}}">
+    <div class="label">Needs attention</div>
+    <div class="value">{{.AttentionCount}}</div>
+  </a>
+</div>
+
+<section class="panel">
+  <header><h2>Active rollouts</h2>{{if .Rollouts}}<span class="meta">{{len .Rollouts}}</span>{{end}}</header>
+  <div class="body">
+    {{if .Rollouts}}
+    <div class="rollout-list">
+      {{range .Rollouts}}
+      <div class="rollout{{if .Counts.AtRisk}} at-risk{{end}}">
+        <div class="rollout-head">
+          <a href="/deploys/{{.ID}}">{{.Driver}}</a>
+          <span class="mono">{{.Version}}</span>
+          {{template "statusbadge" (dict "Status" .State "Label" .StateText)}}
+          {{if eq (printf "%s" .State) "paused"}}
+          <span class="rollout-actions">
+            <form method="post" action="/deploys/{{.ID}}/resume"><button class="btn" type="submit">Resume</button></form>
+            <form method="post" action="/deploys/{{.ID}}/cancel"><button class="btn danger" type="submit">Cancel</button></form>
+          </span>
+          {{end}}
+        </div>
+        {{template "progressbar" .Counts}}
+        <div class="rollout-foot">{{template "deploy-counts" .Counts}} · <a href="/deploys/{{.ID}}">View rollout</a></div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    {{template "empty" (dict "Icon" "✓" "Title" "No active rollouts" "Body" "Push to a driver's repo to start one — builds roll out automatically.")}}
+    {{end}}
+  </div>
+</section>
+
+<section class="panel" id="attention">
+  <header><h2>Needs attention</h2></header>
+  <div class="body">
+    {{if and (not .Offline) (not .FailedUpdates)}}
+      {{template "empty" (dict "Icon" "✓" "Title" "All good" "Body" "Every device is online and no update has failed.")}}
+    {{else}}
+      {{if .Offline}}
+      <h3 class="subhead">Offline ({{len .Offline}})</h3>
+      <ul class="reflist">
+        {{range .Offline}}
+        <li>
+          {{template "onlinedot" false}}
+          {{if .Name}}{{.Name}}{{else}}<span class="mono">{{.ID}}</span>{{end}}
+          <span class="muted">last seen {{reltime .LastSeenAt}}</span>
+        </li>
+        {{end}}
+      </ul>
+      {{end}}
+      {{if .FailedUpdates}}
+      <h3 class="subhead">Failed updates ({{len .FailedUpdates}})</h3>
+      <ul class="reflist">
+        {{range .FailedUpdates}}
+        <li>
+          {{template "statusbadge" (dict "Status" .Status "Label" .Status)}}
+          {{if .DeviceName}}{{.DeviceName}}{{else}}<span class="mono">{{.DeviceID}}</span>{{end}}
+          <span class="muted">{{.Driver}} · {{.Version}}</span>
+          <a href="/deploys/{{.DeployID}}">View</a>
+        </li>
+        {{end}}
+      </ul>
+      {{end}}
+    {{end}}
+  </div>
+</section>
+{{end}}

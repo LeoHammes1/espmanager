@@ -550,6 +550,92 @@ select:focus-visible {
   border-color: var(--accent);
 }
 
+/* ---- Rollouts (overview) ---- */
+.rollout-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.rollout {
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: var(--sp-3);
+}
+
+.rollout.at-risk {
+  border-left-color: var(--danger);
+}
+
+.rollout-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.rollout-head .rollout-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.rollout-foot {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.count-fail {
+  color: var(--danger);
+}
+
+.count-warn {
+  color: var(--warn);
+}
+
+/* at-risk gutter on a deploy list row */
+.at-risk-row td:first-child {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.subhead {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+
+.subhead:first-child {
+  margin-top: 0;
+}
+
+.reflist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.reflist li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.crumbs {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin-bottom: calc(-1 * var(--sp-2));
+}
+
 /* ---- Key/value list ---- */
 .kv {
   display: grid;
