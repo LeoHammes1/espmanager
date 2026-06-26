@@ -15,6 +15,17 @@ type recordingPresence struct {
 func (r *recordingPresence) Connected(id string)    { r.connected = append(r.connected, id) }
 func (r *recordingPresence) Disconnected(id string) { r.disconnected = append(r.disconnected, id) }
 
+func TestPresenceMarksOnlineOnSessionEstablished(t *testing.T) {
+	rec := &recordingPresence{}
+	hook := &presenceHook{presence: rec}
+
+	hook.OnSessionEstablished(&mqtt.Client{ID: "device-1"}, packets.Packet{})
+
+	if len(rec.connected) != 1 || rec.connected[0] != "device-1" {
+		t.Fatalf("session establishment must mark the device online, got %v", rec.connected)
+	}
+}
+
 func TestPresenceIgnoresSessionTakeover(t *testing.T) {
 	rec := &recordingPresence{}
 	hook := &presenceHook{presence: rec}

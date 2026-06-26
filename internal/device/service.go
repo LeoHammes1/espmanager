@@ -51,6 +51,10 @@ func (s *Service) Assign(ctx context.Context, id, driverID string) error {
 	return nil
 }
 
+func (s *Service) ClearPresence(ctx context.Context) error {
+	return s.repo.ClearPresence(ctx)
+}
+
 func (s *Service) Connected(id string) {
 	s.apply(id, s.repo.SetPresence(context.Background(), id, true, s.now()))
 }

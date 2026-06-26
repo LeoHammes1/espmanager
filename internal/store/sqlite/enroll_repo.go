@@ -78,15 +78,44 @@ func (r *EnrollRepository) Claim(ctx context.Context, deviceID, token, passwordH
 	return tx.Commit()
 }
 
-func (r *EnrollRepository) CredentialHash(ctx context.Context, deviceID string) (string, bool, error) {
-	var hash string
+func (r *EnrollRepository) Credentials(ctx context.Context, deviceID string) (enroll.Credentials, bool, error) {
+	var creds enroll.Credentials
 	err := r.db.QueryRowContext(ctx,
-		`select password_hash from device_credentials where device_id = ?`, deviceID).Scan(&hash)
+		`select password_hash, coalesce(pending_hash, '') from device_credentials where device_id = ?`,
+		deviceID).Scan(&creds.Hash, &creds.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
+		return enroll.Credentials{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return enroll.Credentials{}, false, err
 	}
-	return hash, true, nil
+	return creds, true, nil
+}
+
+func (r *EnrollRepository) Revoke(ctx context.Context, deviceID string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`delete from device_credentials where device_id = ?`, deviceID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *EnrollRepository) SetPendingHash(ctx context.Context, deviceID, pendingHash string) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`update device_credentials set pending_hash = ?
+		 where device_id = ? and pending_hash is null`, pendingHash, deviceID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *EnrollRepository) PromotePending(ctx context.Context, deviceID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`update device_credentials set password_hash = pending_hash, pending_hash = null
+		 where device_id = ? and pending_hash is not null`, deviceID)
+	return err
 }

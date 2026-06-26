@@ -27,6 +27,7 @@ static const char *TAG = "espmanager";
 
 #define NS "espm"
 #define KEY_PASS "mqttpass"
+#define KEY_OLDPASS "mqttpassold"
 #define KEY_TARGET "otatarget"
 #define KEY_PENDSEQ "otapendseq"
 #define KEY_FLOOR "otaseq"
@@ -485,14 +486,46 @@ static void handle_cmd_ota(const char *data, int len) {
 	cJSON_Delete(j);
 }
 
+static void handle_cmd_cred(const char *data, int len) {
+	cJSON *j = cJSON_ParseWithLength(data, len);
+	if (j == NULL) {
+		return;
+	}
+	cJSON *pw = cJSON_GetObjectItem(j, "password");
+	bool ok = cJSON_IsString(pw) && pw->valuestring[0] != '\0' && strlen(pw->valuestring) < sizeof(s_password);
+	if (ok) {
+		// Keep the working credential so a rejected rotation can roll back instead
+		// of bricking the device.
+		nvs_store_str(KEY_OLDPASS, s_password);
+		nvs_store_str(KEY_PASS, pw->valuestring);
+	}
+	cJSON_Delete(j);
+	if (ok) {
+		ESP_LOGI(TAG, "credential rotated; restarting to reconnect");
+		vTaskDelay(pdMS_TO_TICKS(200));
+		esp_restart();
+	}
+}
+
+static bool topic_is(esp_mqtt_event_handle_t e, const char *suffix) {
+	char t[80];
+	make_topic(t, sizeof(t), suffix);
+	return e->topic_len == (int)strlen(t) && strncmp(e->topic, t, e->topic_len) == 0;
+}
+
 static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, void *event_data) {
 	esp_mqtt_event_handle_t e = event_data;
 	switch ((esp_mqtt_event_id_t)id) {
 	case MQTT_EVENT_CONNECTED: {
+		// The active credential authenticated, so any rotation rollback copy is no
+		// longer needed.
+		nvs_clear(KEY_OLDPASS);
 		char t[80];
 		make_topic(t, sizeof(t), "availability");
 		esp_mqtt_client_publish(s_mqtt, t, "online", 0, 1, 1);
 		make_topic(t, sizeof(t), "cmd/ota");
+		esp_mqtt_client_subscribe(s_mqtt, t, 1);
+		make_topic(t, sizeof(t), "cmd/cred");
 		esp_mqtt_client_subscribe(s_mqtt, t, 1);
 		publish_heartbeat();
 		if (s_report_rollback_failed) {
@@ -506,10 +539,28 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
 		break;
 	}
 	case MQTT_EVENT_DATA: {
-		char t[80];
-		make_topic(t, sizeof(t), "cmd/ota");
-		if (e->topic_len == (int)strlen(t) && strncmp(e->topic, t, e->topic_len) == 0) {
+		if (topic_is(e, "cmd/ota")) {
 			handle_cmd_ota(e->data, e->data_len);
+		} else if (topic_is(e, "cmd/cred")) {
+			handle_cmd_cred(e->data, e->data_len);
+		}
+		break;
+	}
+	case MQTT_EVENT_ERROR: {
+		// A rejected credential (e.g. a rotation that did not stick) would
+		// otherwise loop forever; roll back to the last working password once.
+		if (e->error_handle != NULL && e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED &&
+		    (e->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_BAD_USERNAME ||
+		     e->error_handle->connect_return_code == MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED)) {
+			char previous[sizeof(s_password)];
+			nvs_load_str(KEY_OLDPASS, previous, sizeof(previous));
+			if (previous[0] != '\0') {
+				nvs_store_str(KEY_PASS, previous);
+				nvs_clear(KEY_OLDPASS);
+				ESP_LOGW(TAG, "credential rejected; rolling back to the previous one");
+				vTaskDelay(pdMS_TO_TICKS(200));
+				esp_restart();
+			}
 		}
 		break;
 	}

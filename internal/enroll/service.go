@@ -15,6 +15,8 @@ var (
 	ErrInvalidToken    = errors.New("enroll: invalid or expired claim token")
 	ErrInvalidDevice   = errors.New("enroll: invalid device id")
 	ErrAlreadyEnrolled = errors.New("enroll: device already enrolled")
+	ErrNotEnrolled     = errors.New("enroll: device is not enrolled")
+	ErrRotationPending = errors.New("enroll: a credential rotation is already pending for this device")
 )
 
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
@@ -54,32 +56,89 @@ func (s *Service) Claim(ctx context.Context, deviceID, token string) (string, er
 	if !valid {
 		return "", ErrInvalidToken
 	}
-	switch _, found, err := s.repo.CredentialHash(ctx, deviceID); {
+	switch _, found, err := s.repo.Credentials(ctx, deviceID); {
 	case err != nil:
 		return "", err
 	case found:
 		return "", ErrAlreadyEnrolled
 	}
 
-	password, err := id.New(24)
-	if err != nil {
-		return "", err
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	password, hash, err := newSecret()
 	if err != nil {
 		return "", err
 	}
 
-	if err := s.repo.Claim(ctx, deviceID, token, string(hash), now); err != nil {
+	if err := s.repo.Claim(ctx, deviceID, token, hash, now); err != nil {
 		return "", err
 	}
 	return password, nil
 }
 
+// Rotate issues a fresh credential for an already-enrolled device and stores it
+// as pending. The current credential stays valid until the device authenticates
+// with the new one (see Authenticate), so a device that misses the rotation is
+// never locked out.
+func (s *Service) Rotate(ctx context.Context, deviceID string) (string, error) {
+	switch _, found, err := s.repo.Credentials(ctx, deviceID); {
+	case err != nil:
+		return "", err
+	case !found:
+		return "", ErrNotEnrolled
+	}
+
+	password, hash, err := newSecret()
+	if err != nil {
+		return "", err
+	}
+	switch ok, err := s.repo.SetPendingHash(ctx, deviceID, hash); {
+	case err != nil:
+		return "", err
+	case !ok:
+		// No row updated: either a rotation is already pending (the device must
+		// adopt or be revoked first) or the device was revoked concurrently.
+		return "", ErrRotationPending
+	}
+	return password, nil
+}
+
+// Revoke removes a device's credential so it can no longer authenticate, until
+// it is claimed again with a fresh token.
+func (s *Service) Revoke(ctx context.Context, deviceID string) error {
+	existed, err := s.repo.Revoke(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if !existed {
+		return ErrNotEnrolled
+	}
+	return nil
+}
+
 func (s *Service) Authenticate(ctx context.Context, deviceID, password string) bool {
-	hash, found, err := s.repo.CredentialHash(ctx, deviceID)
+	creds, found, err := s.repo.Credentials(ctx, deviceID)
 	if err != nil || !found {
 		return false
 	}
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+	if bcrypt.CompareHashAndPassword([]byte(creds.Hash), []byte(password)) == nil {
+		return true
+	}
+	if creds.Pending != "" && bcrypt.CompareHashAndPassword([]byte(creds.Pending), []byte(password)) == nil {
+		if err := s.repo.PromotePending(ctx, deviceID); err != nil {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func newSecret() (password, hash string, err error) {
+	password, err = id.New(24)
+	if err != nil {
+		return "", "", err
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", err
+	}
+	return password, string(h), nil
 }

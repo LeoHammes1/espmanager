@@ -8,6 +8,8 @@ func State(deviceID string) string { return Root + "/" + deviceID + "/state" }
 
 func CmdOTA(deviceID string) string { return Root + "/" + deviceID + "/cmd/ota" }
 
+func CmdCred(deviceID string) string { return Root + "/" + deviceID + "/cmd/cred" }
+
 func OTAStatus(deviceID string) string { return Root + "/" + deviceID + "/ota/status" }
 
 func StateFilter() string { return Root + "/+/state" }

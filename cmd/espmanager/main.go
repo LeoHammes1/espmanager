@@ -73,6 +73,10 @@ func run(log *slog.Logger) error {
 		log.Warn("OTA rollouts disabled; set ESPM_PUBLIC_URL to the device-reachable base URL")
 	}
 
+	if err := deviceSvc.ClearPresence(context.Background()); err != nil {
+		return err
+	}
+
 	broker, err := mqttbroker.New(cfg.MQTTAddr, deviceSvc, enrollSvc)
 	if err != nil {
 		return err
@@ -105,6 +109,7 @@ func run(log *slog.Logger) error {
 		Artifacts:     artifactSvc,
 		Deployer:      deploySvc,
 		Enroller:      enrollSvc,
+		Bus:           broker,
 		Hub:           hub,
 		Templates:     tmpl,
 		Queue:         jobs,
@@ -194,4 +199,3 @@ func parseVersion(payload []byte) string {
 	_ = json.Unmarshal(payload, &msg)
 	return msg.Version
 }
-

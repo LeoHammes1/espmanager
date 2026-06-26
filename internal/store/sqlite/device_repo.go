@@ -53,6 +53,11 @@ func (r *DeviceRepository) SetPresence(ctx context.Context, id string, online bo
 	return err
 }
 
+func (r *DeviceRepository) ClearPresence(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `update devices set online = 0 where online = 1`)
+	return err
+}
+
 func (r *DeviceRepository) RecordHeartbeat(ctx context.Context, id, version string, at time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
 		insert into devices (id, online, last_seen_at, reported_version) values (?, 1, ?, ?)

@@ -37,6 +37,7 @@ type Options struct {
 	Artifacts     ArtifactStore
 	Deployer      Deployer
 	Enroller      Enroller
+	Bus           DeviceBus
 	Hub           *SSEHub
 	Templates     *template.Template
 	Queue         *queue.Queue
@@ -76,6 +77,8 @@ func NewRouter(opts Options) (http.Handler, error) {
 		ur.Get("/", renderPage(opts.Devices, opts.Drivers, opts.Templates, "index.html"))
 		ur.Get("/partials/devices", renderPage(opts.Devices, opts.Drivers, opts.Templates, "devices"))
 		ur.Post("/devices/{id}/driver", assignDriver(opts.Devices))
+		ur.Post("/devices/{id}/rotate", rotateCredential(opts.Enroller, opts.Bus, opts.Log))
+		ur.Post("/devices/{id}/revoke", revokeCredential(opts.Enroller, opts.Bus, opts.Log))
 		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates))
 		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates))
 		ur.Post("/devices/enroll", enrollDevice(opts.Enroller, opts.Templates))

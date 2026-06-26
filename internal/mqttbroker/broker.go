@@ -50,6 +50,19 @@ func (b *Broker) Publish(topic string, payload []byte) error {
 	return b.server.Publish(topic, payload, false, 1)
 }
 
+func (b *Broker) Disconnect(deviceID string) error {
+	cl, ok := b.server.Clients.Get(deviceID)
+	if !ok {
+		return nil
+	}
+	return b.server.DisconnectClient(cl, packets.ErrAdministrativeAction)
+}
+
+func (b *Broker) Online(deviceID string) bool {
+	cl, ok := b.server.Clients.Get(deviceID)
+	return ok && !cl.Closed()
+}
+
 func (b *Broker) Subscribe(filter string, handler func(topic string, payload []byte)) error {
 	b.nextSub++
 	return b.server.Subscribe(filter, b.nextSub, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
@@ -100,16 +113,17 @@ func (h *presenceHook) ID() string { return "presence" }
 
 func (h *presenceHook) Provides(b byte) bool {
 	switch b {
-	case mqtt.OnConnect, mqtt.OnDisconnect:
+	case mqtt.OnSessionEstablished, mqtt.OnDisconnect:
 		return true
 	default:
 		return false
 	}
 }
 
-func (h *presenceHook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
+// OnSessionEstablished fires only after the client authenticates, so a rejected
+// or revoked device never registers as online.
+func (h *presenceHook) OnSessionEstablished(cl *mqtt.Client, pk packets.Packet) {
 	h.presence.Connected(cl.ID)
-	return nil
 }
 
 func (h *presenceHook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
