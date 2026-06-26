@@ -71,6 +71,12 @@ func run(log *slog.Logger) error {
 	if cfg.PublicURL == "" {
 		log.Warn("OTA rollouts disabled; set ESPM_PUBLIC_URL to the device-reachable base URL")
 	}
+	if err := validateBrowserURL(cfg.BrowserURL); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(cfg.BrowserURL, "https://") {
+		log.Warn("session cookies will not be marked Secure; set ESPM_BROWSER_URL to the https browser origin (terminated by Caddy)")
+	}
 
 	if err := deviceSvc.ClearPresence(context.Background()); err != nil {
 		return err
@@ -113,7 +119,7 @@ func run(log *slog.Logger) error {
 		WorkerToken:      cfg.WorkerToken,
 		AdminUser:        cfg.AdminUser,
 		AdminPassword:    cfg.AdminPassword,
-		SecureCookies:    strings.HasPrefix(cfg.PublicURL, "https://"),
+		SecureCookies:    strings.HasPrefix(cfg.BrowserURL, "https://"),
 		FailureThreshold: cfg.FailureThreshold,
 		PublicURL:        cfg.PublicURL,
 	})
@@ -184,8 +190,19 @@ func validatePublicURL(raw string) error {
 		return nil
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("invalid ESPM_PUBLIC_URL %q: must be an absolute http(s) URL", raw)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return fmt.Errorf("invalid ESPM_PUBLIC_URL %q: must be an absolute http:// URL — devices fetch OTA over plain HTTP and cannot do TLS; put the browser's https origin on ESPM_BROWSER_URL", raw)
+	}
+	return nil
+}
+
+func validateBrowserURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("invalid ESPM_BROWSER_URL %q: must be an absolute https:// URL (the browser-facing origin terminated by Caddy)", raw)
 	}
 	return nil
 }

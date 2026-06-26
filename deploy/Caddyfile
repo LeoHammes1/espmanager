@@ -1,0 +1,39 @@
+# ESPManager TLS reverse proxy — the single host-facing HTTP entrypoint.
+#
+# :443 serves the browser UI/API over HTTPS so the browser is a secure context
+# (required by the USB "Add device" wizard — Web Serial needs trusted https).
+# :80 serves ONLY the device paths (/v1, /firmware) in plain HTTP, because ESP32s
+# cannot do TLS (OTA integrity comes from the ed25519 signature); every other :80
+# request is redirected to HTTPS so the UI is never served over plaintext.
+#
+# Default: Caddy's internal CA mints certs on demand for whatever host/IP the
+# browser uses (no domain needed). Trust the root CA on the workstation once or
+# Chrome treats the origin as insecure and hides the wizard:
+#   caddy-data volume -> /data/caddy/pki/authorities/local/root.crt
+#
+# Public domain + Let's Encrypt instead: replace the `:443 { ... }` site address
+# with your FQDN and the `tls internal { on_demand }` line with `tls you@email`,
+# and expose ports 80 + 443 to the internet.
+
+:443 {
+	tls internal {
+		on_demand
+	}
+
+	# SSE /events is a long-lived stream: flush immediately, never buffer.
+	reverse_proxy core:8080 {
+		flush_interval -1
+	}
+}
+
+:80 {
+	# Devices (no TLS) fetch firmware and claim credentials over plain HTTP.
+	@device path /v1/* /firmware/*
+	handle @device {
+		reverse_proxy core:8080
+	}
+	# Anything else on :80 is the browser — force it onto HTTPS.
+	handle {
+		redir https://{host}{uri}
+	}
+}
