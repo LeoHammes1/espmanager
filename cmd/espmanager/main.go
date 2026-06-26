@@ -97,11 +97,6 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	tmpl, err := httpapi.ParseTemplates()
-	if err != nil {
-		return err
-	}
-
 	router, err := httpapi.NewRouter(httpapi.Options{
 		Devices:          deviceSvc,
 		Drivers:          driverSvc,
@@ -111,7 +106,6 @@ func run(log *slog.Logger) error {
 		Enroller:         enrollSvc,
 		Bus:              broker,
 		Hub:              hub,
-		Templates:        tmpl,
 		Queue:            jobs,
 		Webhook:          webhook.NewHandler(driverSvc, jobs, log),
 		Sessions:         sqlitestore.NewSessionRepository(db),
@@ -121,6 +115,7 @@ func run(log *slog.Logger) error {
 		AdminPassword:    cfg.AdminPassword,
 		SecureCookies:    strings.HasPrefix(cfg.PublicURL, "https://"),
 		FailureThreshold: cfg.FailureThreshold,
+		PublicURL:        cfg.PublicURL,
 	})
 	if err != nil {
 		return err

@@ -2,61 +2,47 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"html/template"
+	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/LeoHammes1/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/httpx"
 )
 
 type deviceView struct {
-	ID         string
-	Name       string
-	Version    string
-	LastSeenAt time.Time
-	DriverID   string
-	DriverName string
-	Online     bool
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Version    string     `json:"reportedVersion"`
+	LastSeenAt *time.Time `json:"lastSeenAt"`
+	DriverID   string     `json:"driverId"`
+	DriverName string     `json:"driverName"`
+	Online     bool       `json:"online"`
 }
 
 type driverOption struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type devicesData struct {
-	Devices []deviceView
-	Drivers []driverOption
+	Devices []deviceView   `json:"devices"`
+	Drivers []driverOption `json:"drivers"`
 }
 
-func devicesPage(devices DeviceService, drivers DriverService, tmpl *template.Template, user string) http.HandlerFunc {
+func apiDevices(devices DeviceService, drivers DriverService, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := devicesDataFor(r.Context(), devices, drivers)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "list devices failed", err)
 			return
 		}
-		renderShell(w, tmpl, pageView{
-			Title:   "Devices",
-			Nav:     "devices",
-			User:    user,
-			Content: "page-devices",
-			Data:    data,
-		})
-	}
-}
-
-func devicesRows(devices DeviceService, drivers DriverService, tmpl *template.Template) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := devicesDataFor(r.Context(), devices, drivers)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		render(w, tmpl, "devices-rows", data)
+		httpx.WriteJSON(w, http.StatusOK, data)
 	}
 }
 
@@ -80,11 +66,16 @@ func devicesDataFor(ctx context.Context, devices DeviceService, drivers DriverSe
 		data.Drivers = append(data.Drivers, driverOption{ID: d.ID, Name: d.Name})
 	}
 	for _, d := range ds {
+		var lastSeen *time.Time
+		if !d.LastSeenAt.IsZero() {
+			t := d.LastSeenAt
+			lastSeen = &t
+		}
 		data.Devices = append(data.Devices, deviceView{
 			ID:         d.ID,
 			Name:       d.Name,
 			Version:    d.ReportedVersion,
-			LastSeenAt: d.LastSeenAt,
+			LastSeenAt: lastSeen,
 			DriverID:   d.DriverID,
 			DriverName: names[d.DriverID],
 			Online:     d.Online,
@@ -93,18 +84,25 @@ func devicesDataFor(ctx context.Context, devices DeviceService, drivers DriverSe
 	return data, nil
 }
 
-func assignDriver(devices DeviceService) http.HandlerFunc {
+func apiAssignDriver(devices DeviceService, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := devices.Assign(r.Context(), chi.URLParam(r, "id"), r.FormValue("driver_id"))
+		var req struct {
+			DriverID string `json:"driverId"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			apiErr(w, http.StatusBadRequest, "invalid_request", "Malformed request.")
+			return
+		}
+		err := devices.Assign(r.Context(), chi.URLParam(r, "id"), req.DriverID)
 		switch {
 		case errors.Is(err, device.ErrDeviceNotFound):
-			http.Error(w, "device not found", http.StatusNotFound)
+			apiErr(w, http.StatusNotFound, "not_found", "Device not found.")
 		case errors.Is(err, device.ErrDriverNotFound):
-			http.Error(w, "driver not found", http.StatusBadRequest)
+			apiErr(w, http.StatusBadRequest, "invalid_driver", "Driver not found.")
 		case err != nil:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "assign driver failed", err)
 		default:
-			http.Redirect(w, r, "/devices", http.StatusSeeOther)
+			w.WriteHeader(http.StatusNoContent)
 		}
 	}
 }

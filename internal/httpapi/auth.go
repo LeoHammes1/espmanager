@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
-	"html/template"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/LeoHammes1/espmanager/internal/httpx"
 	"github.com/LeoHammes1/espmanager/internal/id"
 )
 
@@ -24,29 +26,16 @@ type SessionStore interface {
 
 type authGuard struct {
 	sessions      SessionStore
+	user          string
 	password      string
 	secureCookies bool
-	tmpl          *template.Template
 	log           *slog.Logger
 }
 
-type loginView struct {
-	SetupRequired bool
-	Error         string
-}
-
-// middleware guards the in-shell routes. With no admin password configured the
-// server is unprotected by design today; instead of silently letting everyone
-// through (the old BasicAuth behaviour), it forces the login screen, which
-// explains the setup-required state.
-func (a *authGuard) middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.authenticated(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-	})
+type sessionState struct {
+	Authenticated bool   `json:"authenticated"`
+	SetupRequired bool   `json:"setupRequired"`
+	User          string `json:"user"`
 }
 
 func (a *authGuard) authenticated(r *http.Request) bool {
@@ -61,33 +50,59 @@ func (a *authGuard) authenticated(r *http.Request) bool {
 	return err == nil && ok
 }
 
-func (a *authGuard) loginPage(w http.ResponseWriter, r *http.Request) {
-	if a.authenticated(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
+func (a *authGuard) state(r *http.Request) sessionState {
+	authed := a.authenticated(r)
+	user := ""
+	if authed {
+		user = a.user
 	}
-	a.renderLogin(w, http.StatusOK, loginView{SetupRequired: a.password == ""})
+	return sessionState{Authenticated: authed, SetupRequired: a.password == "", User: user}
 }
 
-func (a *authGuard) loginSubmit(w http.ResponseWriter, r *http.Request) {
+// requireAPI guards JSON endpoints: an unauthenticated request gets a 401 JSON
+// body (never a redirect), so the SPA's fetch layer can treat it as "session
+// expired" and route to the login screen.
+func (a *authGuard) requireAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.authenticated(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		apiErr(w, http.StatusUnauthorized, "unauthorized", "Sign in to continue.")
+	})
+}
+
+func (a *authGuard) getSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.WriteJSON(w, http.StatusOK, a.state(r))
+}
+
+func (a *authGuard) postSession(w http.ResponseWriter, r *http.Request) {
 	if a.password == "" {
-		a.renderLogin(w, http.StatusOK, loginView{SetupRequired: true})
+		apiErr(w, http.StatusConflict, "setup_required", "Set ESPM_ADMIN_PASSWORD and restart the server.")
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(r.FormValue("password")), []byte(a.password)) != 1 {
-		a.renderLogin(w, http.StatusUnauthorized, loginView{Error: "Wrong password. Try again."})
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		apiErr(w, http.StatusBadRequest, "invalid_request", "Malformed request.")
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.password)) != 1 {
+		apiErr(w, http.StatusUnauthorized, "invalid_credentials", "Wrong password.")
 		return
 	}
 
 	sid, err := id.New(24)
 	if err != nil {
-		a.renderLogin(w, http.StatusInternalServerError, loginView{Error: "Something went wrong. Try again."})
+		apiErr(w, http.StatusInternalServerError, "internal", "Something went wrong.")
 		return
 	}
 	expires := time.Now().Add(sessionTTL)
 	if err := a.sessions.Create(r.Context(), sid, expires); err != nil {
 		a.log.Error("create session failed", "err", err)
-		a.renderLogin(w, http.StatusInternalServerError, loginView{Error: "Something went wrong. Try again."})
+		apiErr(w, http.StatusInternalServerError, "internal", "Something went wrong.")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -99,23 +114,15 @@ func (a *authGuard) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		Secure:   a.secureCookies,
 		Expires:  expires,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	httpx.WriteJSON(w, http.StatusOK, sessionState{Authenticated: true, SetupRequired: false, User: a.user})
 }
 
-func (a *authGuard) logout(w http.ResponseWriter, r *http.Request) {
+func (a *authGuard) deleteSession(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if err := a.sessions.Delete(r.Context(), c.Value); err != nil {
 			a.log.Error("delete session failed", "err", err)
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
-func (a *authGuard) renderLogin(w http.ResponseWriter, status int, v loginView) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	if err := a.tmpl.ExecuteTemplate(w, "login", v); err != nil {
-		a.log.Error("render login failed", "err", err)
-	}
+	w.WriteHeader(http.StatusNoContent)
 }

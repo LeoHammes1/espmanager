@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,137 +26,117 @@ func (f *fakeSessions) Create(_ context.Context, id string, expiresAt time.Time)
 	f.created[id] = expiresAt
 	return nil
 }
-
-func (f *fakeSessions) Valid(_ context.Context, id string, _ time.Time) (bool, error) {
+func (f *fakeSessions) Valid(_ context.Context, _ string, _ time.Time) (bool, error) {
 	return f.valid, nil
 }
-
 func (f *fakeSessions) Delete(_ context.Context, id string) error {
 	f.deleted[id] = true
 	return nil
 }
 
-func testGuard(t *testing.T, sessions SessionStore, password string) *authGuard {
-	t.Helper()
-	tmpl, err := ParseTemplates()
-	if err != nil {
-		t.Fatalf("parse templates: %v", err)
-	}
+func testGuard(sessions SessionStore, password string) *authGuard {
 	return &authGuard{
 		sessions: sessions,
+		user:     "admin",
 		password: password,
-		tmpl:     tmpl,
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
-func TestMiddlewareRedirectsWithoutSession(t *testing.T) {
-	g := testGuard(t, newFakeSessions(), "secret")
+func decode[T any](t *testing.T, body io.Reader) T {
+	t.Helper()
+	var v T
+	if err := json.NewDecoder(body).Decode(&v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return v
+}
+
+func TestRequireAPIRejectsWithoutSession(t *testing.T) {
+	g := testGuard(newFakeSessions(), "secret")
 	called := false
-	h := g.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	h := g.requireAPI(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/devices", nil))
 
 	if called {
-		t.Fatal("protected handler ran without a session")
+		t.Fatal("guarded handler ran without a session")
 	}
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("want redirect to /login, got %d %q", rec.Code, rec.Header().Get("Location"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", rec.Code)
+	}
+	if got := decode[map[string]string](t, rec.Body)["error"]; got != "unauthorized" {
+		t.Fatalf("want error=unauthorized, got %q", got)
 	}
 }
 
-func TestMiddlewareAllowsValidSession(t *testing.T) {
+func TestRequireAPIAllowsValidSession(t *testing.T) {
 	s := newFakeSessions()
 	s.valid = true
-	g := testGuard(t, s, "secret")
+	g := testGuard(s, "secret")
 	called := false
-	h := g.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true }))
+	h := g.requireAPI(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "abc"})
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	if !called {
-		t.Fatal("protected handler did not run for a valid session")
+		t.Fatal("guarded handler did not run for a valid session")
 	}
 }
 
-func TestMiddlewareBlocksWhenNoPasswordConfigured(t *testing.T) {
-	s := newFakeSessions()
-	s.valid = true
-	g := testGuard(t, s, "") // setup required
-	called := false
-	h := g.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
-
+func TestGetSessionReportsState(t *testing.T) {
+	g := testGuard(newFakeSessions(), "secret")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "abc"})
-	h.ServeHTTP(rec, req)
+	g.getSession(rec, httptest.NewRequest(http.MethodGet, "/api/session", nil))
 
-	if called {
-		t.Fatal("server must not be reachable with no admin password set")
-	}
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("want redirect, got %d", rec.Code)
+	st := decode[sessionState](t, rec.Body)
+	if st.Authenticated || st.SetupRequired {
+		t.Fatalf("want unauthenticated, not setup-required, got %+v", st)
 	}
 }
 
-func TestLoginSucceedsAndSetsCookie(t *testing.T) {
-	s := newFakeSessions()
-	g := testGuard(t, s, "secret")
-
+func TestGetSessionSetupRequired(t *testing.T) {
+	g := testGuard(newFakeSessions(), "")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	g.loginSubmit(rec, req)
+	g.getSession(rec, httptest.NewRequest(http.MethodGet, "/api/session", nil))
 
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
-		t.Fatalf("want redirect to /, got %d %q", rec.Code, rec.Header().Get("Location"))
+	if !decode[sessionState](t, rec.Body).SetupRequired {
+		t.Fatal("want setupRequired=true when no admin password is set")
+	}
+}
+
+func TestPostSessionSucceeds(t *testing.T) {
+	s := newFakeSessions()
+	g := testGuard(s, "secret")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"password":"secret"}`))
+	g.postSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	if len(s.created) != 1 {
 		t.Fatalf("want 1 session created, got %d", len(s.created))
 	}
-	var found bool
+	var hasCookie bool
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == sessionCookie && c.Value != "" && c.HttpOnly {
-			found = true
+			hasCookie = true
 		}
 	}
-	if !found {
+	if !hasCookie {
 		t.Fatal("want an HttpOnly session cookie")
 	}
 }
 
-func TestLoginCookieSecureFollowsConfig(t *testing.T) {
-	g := testGuard(t, newFakeSessions(), "secret")
-	g.secureCookies = true
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	g.loginSubmit(rec, req)
-
-	var c *http.Cookie
-	for _, cc := range rec.Result().Cookies() {
-		if cc.Name == sessionCookie {
-			c = cc
-		}
-	}
-	if c == nil || !c.Secure {
-		t.Fatal("want a Secure session cookie when secureCookies is enabled")
-	}
-}
-
-func TestLoginRejectsWrongPassword(t *testing.T) {
+func TestPostSessionRejectsWrongPassword(t *testing.T) {
 	s := newFakeSessions()
-	g := testGuard(t, s, "secret")
-
+	g := testGuard(s, "secret")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=nope"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	g.loginSubmit(rec, req)
+	g.postSession(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"password":"nope"}`)))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", rec.Code)
@@ -165,30 +146,28 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 	}
 }
 
-func TestLoginPageShowsSetupRequired(t *testing.T) {
-	g := testGuard(t, newFakeSessions(), "")
-
+func TestPostSessionSetupRequired(t *testing.T) {
+	g := testGuard(newFakeSessions(), "")
 	rec := httptest.NewRecorder()
-	g.loginPage(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+	g.postSession(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"password":"x"}`)))
 
-	if !strings.Contains(rec.Body.String(), "ESPM_ADMIN_PASSWORD") {
-		t.Fatal("setup-required login page should mention ESPM_ADMIN_PASSWORD")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 setup_required, got %d", rec.Code)
 	}
 }
 
-func TestLogoutClearsSession(t *testing.T) {
+func TestDeleteSessionClears(t *testing.T) {
 	s := newFakeSessions()
-	g := testGuard(t, s, "secret")
-
+	g := testGuard(s, "secret")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/session", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "abc"})
-	g.logout(rec, req)
+	g.deleteSession(rec, req)
 
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", rec.Code)
+	}
 	if !s.deleted["abc"] {
 		t.Fatal("logout should delete the session")
-	}
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
-		t.Fatalf("want redirect to /login, got %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }

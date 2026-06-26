@@ -1,6 +1,6 @@
 # ESPManager
 
-Gerenciador open source, leve e self-hosted (homelab/Proxmox) de frotas de dispositivos ESP32, com deploy de firmware por OTA disparado por `git push`. Backend em Go (binário único), MQTT embutido, SQLite, UI HTMX.
+Gerenciador open source, leve e self-hosted (homelab/Proxmox) de frotas de dispositivos ESP32, com deploy de firmware por OTA disparado por `git push`. Backend em Go (binário único), MQTT embutido, SQLite, UI React (SPA em `web/` com Vite + TypeScript + shadcn/ui, buildada e embarcada no binário via `go:embed`, sobre uma API JSON em `/api`).
 
 ## Regras de desenvolvimento
 

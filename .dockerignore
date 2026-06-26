@@ -1,0 +1,12 @@
+.git
+web/node_modules
+internal/web/dist
+/data
+*.db
+*.db-wal
+*.db-shm
+*.key
+.env
+.pio
+client
+deploy/.env

@@ -14,8 +14,8 @@ func NewSSEHub() *SSEHub {
 	return &SSEHub{clients: make(map[chan struct{}]struct{})}
 }
 
-// Changed signals every connected client to re-fetch its live regions. One
-// generic tick is enough: the UI re-pulls all [data-live] partials on any change.
+// Changed signals every connected client to refresh. One generic tick is
+// enough: the SPA invalidates its query cache and refetches on any change.
 func (h *SSEHub) Changed() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

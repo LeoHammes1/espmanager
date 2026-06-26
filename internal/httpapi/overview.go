@@ -2,56 +2,46 @@ package httpapi
 
 import (
 	"context"
-	"html/template"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/LeoHammes1/espmanager/internal/deploy"
+	"github.com/LeoHammes1/espmanager/internal/httpx"
 )
 
 type deviceRef struct {
-	ID         string
-	Name       string
-	LastSeenAt time.Time
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	LastSeenAt *time.Time `json:"lastSeenAt"`
 }
 
 type failedRef struct {
-	DeployID   string
-	DeviceID   string
-	DeviceName string
-	Driver     string
-	Version    string
-	Status     deploy.Status
+	DeployID   string        `json:"deployId"`
+	DeviceID   string        `json:"deviceId"`
+	DeviceName string        `json:"deviceName"`
+	Driver     string        `json:"driver"`
+	Version    string        `json:"version"`
+	Status     deploy.Status `json:"status"`
 }
 
 type overviewView struct {
-	DevicesOnline  int
-	DevicesTotal   int
-	AttentionCount int
-	Rollouts       []deployRow
-	Offline        []deviceRef
-	FailedUpdates  []failedRef
+	DevicesOnline  int         `json:"devicesOnline"`
+	DevicesTotal   int         `json:"devicesTotal"`
+	AttentionCount int         `json:"attentionCount"`
+	Rollouts       []deployRow `json:"rollouts"`
+	Offline        []deviceRef `json:"offline"`
+	FailedUpdates  []failedRef `json:"failedUpdates"`
 }
 
-func overviewPage(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, user string, threshold int) http.HandlerFunc {
+func apiOverview(deploys DeployService, drivers DriverService, devices DeviceService, threshold int, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := overviewData(r.Context(), deploys, drivers, devices, threshold)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "overview failed", err)
 			return
 		}
-		renderShell(w, tmpl, pageView{Title: "Overview", Nav: "overview", User: user, Content: "page-overview", Data: data})
-	}
-}
-
-func overviewBody(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, threshold int) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := overviewData(r.Context(), deploys, drivers, devices, threshold)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		render(w, tmpl, "overview-body", data)
+		httpx.WriteJSON(w, http.StatusOK, data)
 	}
 }
 
@@ -61,14 +51,24 @@ func overviewData(ctx context.Context, deploys DeployService, drivers DriverServ
 		return overviewView{}, err
 	}
 
-	v := overviewView{DevicesTotal: len(ds)}
+	v := overviewView{
+		DevicesTotal:  len(ds),
+		Rollouts:      []deployRow{},
+		Offline:       []deviceRef{},
+		FailedUpdates: []failedRef{},
+	}
 	attention := make(map[string]struct{})
 	for _, d := range ds {
 		if d.Online {
 			v.DevicesOnline++
 			continue
 		}
-		v.Offline = append(v.Offline, deviceRef{ID: d.ID, Name: d.Name, LastSeenAt: d.LastSeenAt})
+		ref := deviceRef{ID: d.ID, Name: d.Name}
+		if !d.LastSeenAt.IsZero() {
+			t := d.LastSeenAt
+			ref.LastSeenAt = &t
+		}
+		v.Offline = append(v.Offline, ref)
 		attention[d.ID] = struct{}{}
 	}
 

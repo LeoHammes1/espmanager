@@ -1,5 +1,8 @@
 /data/
 /dist/
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+/web/node_modules/
 *.db
 *.db-wal
 *.db-shm

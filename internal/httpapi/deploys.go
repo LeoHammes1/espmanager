@@ -2,16 +2,17 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"html/template"
+	"log/slog"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/LeoHammes1/espmanager/internal/deploy"
 	"github.com/LeoHammes1/espmanager/internal/device"
+	"github.com/LeoHammes1/espmanager/internal/httpx"
 )
 
 type deployCounts struct {
@@ -51,10 +52,24 @@ func (c deployCounts) pct(n int) int {
 	return n * 100 / c.Total
 }
 
-func (c deployCounts) SucceededPct() int { return c.pct(c.Succeeded) }
-func (c deployCounts) InflightPct() int  { return c.pct(c.Inflight) }
-func (c deployCounts) FailedPct() int    { return c.pct(c.Failed) }
-func (c deployCounts) LostPct() int      { return c.pct(c.Lost) }
+func (c deployCounts) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Total        int  `json:"total"`
+		Succeeded    int  `json:"succeeded"`
+		Inflight     int  `json:"inflight"`
+		Failed       int  `json:"failed"`
+		Lost         int  `json:"lost"`
+		Pending      int  `json:"pending"`
+		AtRisk       bool `json:"atRisk"`
+		SucceededPct int  `json:"succeededPct"`
+		InflightPct  int  `json:"inflightPct"`
+		FailedPct    int  `json:"failedPct"`
+		LostPct      int  `json:"lostPct"`
+	}{
+		c.Total, c.Succeeded, c.Inflight, c.Failed, c.Lost, c.Pending,
+		c.AtRisk(), c.pct(c.Succeeded), c.pct(c.Inflight), c.pct(c.Failed), c.pct(c.Lost),
+	})
+}
 
 func activeDeploy(s deploy.State) bool {
 	return s == deploy.StateInProgress || s == deploy.StatePaused
@@ -76,52 +91,50 @@ func stateText(s deploy.State) string {
 }
 
 type deployRow struct {
-	ID        string
-	Driver    string
-	Version   string
-	State     deploy.State
-	Counts    deployCounts
-	CreatedAt time.Time
+	ID        string       `json:"id"`
+	Driver    string       `json:"driver"`
+	Version   string       `json:"version"`
+	State     deploy.State `json:"state"`
+	StateText string       `json:"stateText"`
+	Counts    deployCounts `json:"counts"`
+	CreatedAt time.Time    `json:"createdAt"`
 }
 
-func (r deployRow) StateText() string { return stateText(r.State) }
-
 type targetRow struct {
-	DeviceID   string
-	DeviceName string
-	Sequence   int64
-	Batch      int
-	Status     deploy.Status
-	UpdatedAt  time.Time
+	DeviceID   string        `json:"deviceId"`
+	DeviceName string        `json:"deviceName"`
+	Sequence   int64         `json:"sequence,string"`
+	Batch      int           `json:"batch"`
+	Status     deploy.Status `json:"status"`
+	UpdatedAt  time.Time     `json:"updatedAt"`
 }
 
 type batchView struct {
-	Batch   int
-	Label   string
-	Counts  deployCounts
-	Targets []targetRow
+	Batch   int          `json:"batch"`
+	Label   string       `json:"label"`
+	Counts  deployCounts `json:"counts"`
+	Targets []targetRow  `json:"targets"`
 }
 
 type pauseInfo struct {
-	BatchLabel string
-	Failed     int
-	Lost       int
-	Total      int
-	Threshold  int
+	BatchLabel string `json:"batchLabel"`
+	Failed     int    `json:"failed"`
+	Lost       int    `json:"lost"`
+	Total      int    `json:"total"`
+	Threshold  int    `json:"threshold"`
 }
 
 type deployDetailView struct {
-	ID        string
-	Driver    string
-	Version   string
-	State     deploy.State
-	CreatedAt time.Time
-	Counts    deployCounts
-	Batches   []batchView
-	Pause     *pauseInfo
+	ID        string       `json:"id"`
+	Driver    string       `json:"driver"`
+	Version   string       `json:"version"`
+	State     deploy.State `json:"state"`
+	StateText string       `json:"stateText"`
+	CreatedAt time.Time    `json:"createdAt"`
+	Counts    deployCounts `json:"counts"`
+	Batches   []batchView  `json:"batches"`
+	Pause     *pauseInfo   `json:"pause"`
 }
-
-func (v deployDetailView) StateText() string { return stateText(v.State) }
 
 func batchLabel(batch int) string {
 	if batch == 0 {
@@ -137,8 +150,8 @@ func labelOrID(id, name string) string {
 	return id
 }
 
-// deployBuilder turns deploy + target rows into view models, resolving driver and
-// device names from the current fleet.
+// deployBuilder turns deploy + target rows into view models, resolving driver
+// and device names from the current fleet.
 type deployBuilder struct {
 	drivers   map[string]string
 	deviceNm  map[string]string
@@ -174,6 +187,7 @@ func (b deployBuilder) row(d deploy.Deploy, targets []deploy.Target) deployRow {
 		Driver:    labelOrID(d.DriverID, b.drivers[d.DriverID]),
 		Version:   d.Version,
 		State:     d.State,
+		StateText: stateText(d.State),
 		Counts:    countTargets(targets),
 		CreatedAt: d.CreatedAt,
 	}
@@ -185,12 +199,14 @@ func (b deployBuilder) detail(d deploy.Deploy, targets []deploy.Target) deployDe
 		Driver:    labelOrID(d.DriverID, b.drivers[d.DriverID]),
 		Version:   d.Version,
 		State:     d.State,
+		StateText: stateText(d.State),
 		CreatedAt: d.CreatedAt,
 		Counts:    countTargets(targets),
+		Batches:   []batchView{},
 	}
 	for _, batch := range deploy.Batches(targets) {
 		group := deploy.TargetsInBatch(targets, batch)
-		bv := batchView{Batch: batch, Label: batchLabel(batch), Counts: countTargets(group)}
+		bv := batchView{Batch: batch, Label: batchLabel(batch), Counts: countTargets(group), Targets: []targetRow{}}
 		for _, t := range group {
 			bv.Targets = append(bv.Targets, targetRow{
 				DeviceID:   t.DeviceID,
@@ -215,126 +231,63 @@ func (b deployBuilder) detail(d deploy.Deploy, targets []deploy.Target) deployDe
 	return v
 }
 
-func deploysPage(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, user string, threshold int) http.HandlerFunc {
+func apiDeploys(deploys DeployService, drivers DriverService, devices DeviceService, threshold int, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := deploysData(r.Context(), deploys, drivers, devices, threshold)
+		b, _, err := newDeployBuilder(r.Context(), drivers, devices, threshold)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "load fleet failed", err)
 			return
 		}
-		renderShell(w, tmpl, pageView{Title: "Deploys", Nav: "deploys", User: user, Content: "page-deploys", Data: data})
-	}
-}
-
-func deploysRows(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, threshold int) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := deploysData(r.Context(), deploys, drivers, devices, threshold)
+		list, err := deploys.ListDeploys(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "list deploys failed", err)
 			return
 		}
-		render(w, tmpl, "deploys-rows", data)
-	}
-}
-
-type deploysListData struct {
-	Deploys []deployRow
-}
-
-func deploysData(ctx context.Context, deploys DeployService, drivers DriverService, devices DeviceService, threshold int) (deploysListData, error) {
-	b, _, err := newDeployBuilder(ctx, drivers, devices, threshold)
-	if err != nil {
-		return deploysListData{}, err
-	}
-	list, err := deploys.ListDeploys(ctx)
-	if err != nil {
-		return deploysListData{}, err
-	}
-	data := deploysListData{Deploys: make([]deployRow, 0, len(list))}
-	for _, d := range list {
-		targets, err := deploys.Targets(ctx, d.ID)
-		if err != nil {
-			return deploysListData{}, err
+		rows := make([]deployRow, 0, len(list))
+		for _, d := range list {
+			targets, err := deploys.Targets(r.Context(), d.ID)
+			if err != nil {
+				apiInternal(w, log, "load deploy targets failed", err)
+				return
+			}
+			rows = append(rows, b.row(d, targets))
 		}
-		data.Deploys = append(data.Deploys, b.row(d, targets))
+		httpx.WriteJSON(w, http.StatusOK, rows)
 	}
-	return data, nil
 }
 
-func deployDetailPage(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, user string, threshold int) http.HandlerFunc {
+func apiDeployDetail(deploys DeployService, drivers DriverService, devices DeviceService, threshold int, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		v, err := deployDetailData(r.Context(), chi.URLParam(r, "id"), deploys, drivers, devices, threshold)
+		b, _, err := newDeployBuilder(r.Context(), drivers, devices, threshold)
+		if err != nil {
+			apiInternal(w, log, "load fleet failed", err)
+			return
+		}
+		d, targets, err := deploys.DeployDetail(r.Context(), chi.URLParam(r, "id"))
 		if errors.Is(err, deploy.ErrDeployNotFound) {
-			http.NotFound(w, r)
+			apiErr(w, http.StatusNotFound, "not_found", "Deploy not found.")
 			return
 		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "load deploy failed", err)
 			return
 		}
-		renderShell(w, tmpl, pageView{Title: "Deploy " + v.Version, Nav: "deploys", User: user, Content: "page-deploy", Data: v})
+		httpx.WriteJSON(w, http.StatusOK, b.detail(d, targets))
 	}
 }
 
-func deployTargets(deploys DeployService, drivers DriverService, devices DeviceService, tmpl *template.Template, threshold int) http.HandlerFunc {
+func deployAction(action func(context.Context, string) error, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		v, err := deployDetailData(r.Context(), chi.URLParam(r, "id"), deploys, drivers, devices, threshold)
-		if errors.Is(err, deploy.ErrDeployNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		render(w, tmpl, "deploy-body", v)
-	}
-}
-
-func deployDetailData(ctx context.Context, id string, deploys DeployService, drivers DriverService, devices DeviceService, threshold int) (deployDetailView, error) {
-	b, _, err := newDeployBuilder(ctx, drivers, devices, threshold)
-	if err != nil {
-		return deployDetailView{}, err
-	}
-	d, targets, err := deploys.DeployDetail(ctx, id)
-	if err != nil {
-		return deployDetailView{}, err
-	}
-	return b.detail(d, targets), nil
-}
-
-func resumeDeploy(deploys DeployService) http.HandlerFunc {
-	return deployAction(deploys.Resume)
-}
-
-func cancelDeploy(deploys DeployService) http.HandlerFunc {
-	return deployAction(deploys.Cancel)
-}
-
-func deployAction(action func(context.Context, string) error) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		err := action(r.Context(), id)
+		err := action(r.Context(), chi.URLParam(r, "id"))
 		switch {
 		case errors.Is(err, deploy.ErrDeployNotFound):
-			http.NotFound(w, r)
+			apiErr(w, http.StatusNotFound, "not_found", "Deploy not found.")
 		case errors.Is(err, deploy.ErrNotPaused), errors.Is(err, deploy.ErrNotCancellable):
-			http.Error(w, err.Error(), http.StatusConflict)
+			apiErr(w, http.StatusConflict, "conflict", err.Error())
 		case err != nil:
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			apiInternal(w, log, "deploy action failed", err)
 		default:
-			http.Redirect(w, r, actionDest(r, id), http.StatusSeeOther)
+			w.WriteHeader(http.StatusNoContent)
 		}
 	}
-}
-
-// actionDest returns the operator to the Overview when the action originated
-// there, otherwise to the deploy detail page.
-func actionDest(r *http.Request, id string) string {
-	if ref := r.Header.Get("Referer"); ref != "" {
-		if u, err := url.Parse(ref); err == nil && u.Path == "/" {
-			return "/"
-		}
-	}
-	return "/deploys/" + id
 }

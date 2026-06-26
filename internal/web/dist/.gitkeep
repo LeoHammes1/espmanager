@@ -1,0 +1,2 @@
+Placeholder so //go:embed all:dist compiles before the SPA is built.
+The real Vite build output (index.html + assets) lands here and is gitignored.

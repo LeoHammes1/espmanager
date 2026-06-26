@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"html/template"
-	"io/fs"
 	"log/slog"
 	"net/http"
 
@@ -49,7 +47,6 @@ type Options struct {
 	Enroller         Enroller
 	Bus              DeviceBus
 	Hub              *SSEHub
-	Templates        *template.Template
 	Queue            *queue.Queue
 	Webhook          http.Handler
 	Sessions         SessionStore
@@ -59,22 +56,16 @@ type Options struct {
 	AdminPassword    string
 	SecureCookies    bool
 	FailureThreshold int
+	PublicURL        string
 }
 
 func NewRouter(opts Options) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
-	staticFS, err := fs.Sub(web.FS, "static")
-	if err != nil {
-		return nil, err
-	}
-	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-
 	if opts.Webhook != nil {
 		r.Post("/webhook/git/{driverID}", opts.Webhook.ServeHTTP)
 	}
-
 	r.Get("/firmware/{driver}/{file}", serveFirmware(opts.Artifacts))
 	r.With(middleware.Throttle(20)).Post("/v1/claim", claimDevice(opts.Enroller, opts.Log))
 
@@ -87,35 +78,20 @@ func NewRouter(opts Options) (http.Handler, error) {
 
 	guard := &authGuard{
 		sessions:      opts.Sessions,
+		user:          opts.AdminUser,
 		password:      opts.AdminPassword,
 		secureCookies: opts.SecureCookies,
-		tmpl:          opts.Templates,
 		log:           opts.Log,
 	}
-	r.Get("/login", guard.loginPage)
-	r.With(middleware.Throttle(10)).Post("/login", guard.loginSubmit)
-	r.Post("/logout", guard.logout)
 
-	r.Group(func(ur chi.Router) {
-		ur.Use(guard.middleware)
-		ur.Get("/", overviewPage(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.AdminUser, opts.FailureThreshold))
-		ur.Get("/partials/overview", overviewBody(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.FailureThreshold))
-		ur.Get("/devices", devicesPage(opts.Devices, opts.Drivers, opts.Templates, opts.AdminUser))
-		ur.Get("/partials/devices", devicesRows(opts.Devices, opts.Drivers, opts.Templates))
-		ur.Post("/devices/{id}/driver", assignDriver(opts.Devices))
-		ur.Post("/devices/{id}/rotate", rotateCredential(opts.Enroller, opts.Bus, opts.Log))
-		ur.Post("/devices/{id}/revoke", revokeCredential(opts.Enroller, opts.Bus, opts.Log))
-		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates, opts.AdminUser))
-		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates, opts.AdminUser))
-		ur.Post("/devices/enroll", enrollDevice(opts.Enroller, opts.Templates, opts.AdminUser))
-		ur.Get("/deploys", deploysPage(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.AdminUser, opts.FailureThreshold))
-		ur.Get("/partials/deploys", deploysRows(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.FailureThreshold))
-		ur.Get("/deploys/{id}", deployDetailPage(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.AdminUser, opts.FailureThreshold))
-		ur.Get("/partials/deploys/{id}/body", deployTargets(opts.Deploys, opts.Drivers, opts.Devices, opts.Templates, opts.FailureThreshold))
-		ur.Post("/deploys/{id}/resume", resumeDeploy(opts.Deploys))
-		ur.Post("/deploys/{id}/cancel", cancelDeploy(opts.Deploys))
-		ur.Get("/events", opts.Hub.Handler())
-	})
+	r.Mount("/api", apiRouter(opts, guard))
+	r.With(guard.requireAPI).Get("/events", opts.Hub.Handler())
+
+	sub, err := web.SPA()
+	if err != nil {
+		return nil, err
+	}
+	r.NotFound(spaHandler(sub))
 
 	return r, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,40 +28,35 @@ type DeviceBus interface {
 	Online(deviceID string) bool
 }
 
-func enrollDevice(enroller Enroller, tmpl *template.Template, user string) http.HandlerFunc {
+func apiEnroll(enroller Enroller, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t, err := enroller.Mint(r.Context())
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			log.Error("mint claim token failed", "err", err)
+			apiErr(w, http.StatusInternalServerError, "internal", "Could not create a claim token.")
 			return
 		}
-		renderShell(w, tmpl, pageView{
-			Title:   "Device enrolled",
-			Nav:     "devices",
-			User:    user,
-			Content: "page-device-enrolled",
-			Data: map[string]string{
-				"Token":     t.Value,
-				"ExpiresAt": t.ExpiresAt.Format("2006-01-02 15:04:05 MST"),
-			},
+		httpx.WriteJSON(w, http.StatusCreated, map[string]string{
+			"token":     t.Value,
+			"expiresAt": t.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
 }
 
-func rotateCredential(enroller Enroller, bus DeviceBus, log *slog.Logger) http.HandlerFunc {
+func apiRotate(enroller Enroller, bus DeviceBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "id")
 		password, err := enroller.Rotate(r.Context(), deviceID)
 		switch {
 		case errors.Is(err, enroll.ErrNotEnrolled):
-			http.Error(w, "device is not enrolled", http.StatusNotFound)
+			apiErr(w, http.StatusNotFound, "not_enrolled", "Device is not enrolled.")
 			return
 		case errors.Is(err, enroll.ErrRotationPending):
-			http.Error(w, "a credential rotation is already pending; let the device adopt it or revoke first", http.StatusConflict)
+			apiErr(w, http.StatusConflict, "rotation_pending", "A credential rotation is already pending; let the device adopt it or revoke first.")
 			return
 		case err != nil:
 			log.Error("credential rotation failed", "device", deviceID, "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			apiErr(w, http.StatusInternalServerError, "internal", "Internal error.")
 			return
 		}
 
@@ -70,30 +64,30 @@ func rotateCredential(enroller Enroller, bus DeviceBus, log *slog.Logger) http.H
 		// so an undelivered rotation never locks the device out — but the operator
 		// must know it was not applied. Only report success when it was delivered.
 		if !bus.Online(deviceID) {
-			httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"device_id": deviceID, "password": password, "delivered": false})
+			httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"deviceId": deviceID, "password": password, "delivered": false})
 			return
 		}
 		payload, _ := json.Marshal(map[string]string{"password": password})
 		if err := bus.Publish(topics.CmdCred(deviceID), payload); err != nil {
 			log.Error("publish rotated credential failed", "device", deviceID, "err", err)
-			http.Error(w, "credential staged but delivery failed; retry once the device is online", http.StatusBadGateway)
+			apiErr(w, http.StatusBadGateway, "delivery_failed", "Credential staged but delivery failed; retry once the device is online.")
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"device_id": deviceID, "password": password, "delivered": true})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"deviceId": deviceID, "password": password, "delivered": true})
 	}
 }
 
-func revokeCredential(enroller Enroller, bus DeviceBus, log *slog.Logger) http.HandlerFunc {
+func apiRevoke(enroller Enroller, bus DeviceBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "id")
 		err := enroller.Revoke(r.Context(), deviceID)
 		switch {
 		case errors.Is(err, enroll.ErrNotEnrolled):
-			http.Error(w, "device is not enrolled", http.StatusNotFound)
+			apiErr(w, http.StatusNotFound, "not_enrolled", "Device is not enrolled.")
 			return
 		case err != nil:
 			log.Error("credential revoke failed", "device", deviceID, "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			apiErr(w, http.StatusInternalServerError, "internal", "Internal error.")
 			return
 		}
 		if err := bus.Disconnect(deviceID); err != nil {
