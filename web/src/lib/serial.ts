@@ -78,6 +78,7 @@ export class EspmSerial {
 
   async open(): Promise<void> {
     if (!this.port.readable) await this.port.open({ baudRate: 115200 });
+    await this.resetIntoApp();
     this.reader = this.port.readable!.getReader();
     try {
       this.writer = this.port.writable!.getWriter();
@@ -85,6 +86,22 @@ export class EspmSerial {
       this.reader.releaseLock();
       this.reader = null;
       throw e;
+    }
+  }
+
+  // resetIntoApp pulses the auto-reset lines so the chip boots the application
+  // after flashing. esptool can leave the chip in the ROM download bootloader,
+  // which does not speak the ESPM protocol; holding IO0 high (DTR deasserted)
+  // while toggling EN (RTS) guarantees a normal boot. Best-effort: USB-serial
+  // bridges without these lines simply skip it and the boot ESPM:READY is used.
+  private async resetIntoApp(): Promise<void> {
+    try {
+      await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+      await new Promise((r) => setTimeout(r, 120));
+      await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+      await new Promise((r) => setTimeout(r, 300));
+    } catch {
+      // setSignals unsupported or failed; getMac will still retry GETMAC.
     }
   }
 
@@ -139,6 +156,20 @@ export class EspmSerial {
     await this.writer!.write(this.encoder.encode(line + "\n"));
   }
 
+  // readReply waits for a command acknowledgement, skipping stray ESPM:READY
+  // banners (e.g. a leftover GETMAC response or a boot banner) and other noise
+  // until the device answers ESPM:OK / ESPM:ERR.
+  private async readReply(timeoutMs = 4000): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+      const line = await this.readLine(remaining);
+      if (line === null) return null;
+      if (line.startsWith("ESPM:OK") || line.startsWith("ESPM:ERR")) return line;
+    }
+  }
+
   // getMac probes the agent until it answers ESPM:READY <mac>.
   async getMac(): Promise<string> {
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -157,7 +188,7 @@ export class EspmSerial {
 
   private async setKey(key: string, value: string): Promise<void> {
     await this.send(`ESPM:SET ${key} ${value}`);
-    const r = await this.readLine();
+    const r = await this.readReply();
     if (r !== "ESPM:OK") throw new Error(`Device rejected ${key} (${r ?? "no reply"}).`);
   }
 
@@ -176,7 +207,7 @@ export class EspmSerial {
     await this.setKey("mport", String(cfg.mport));
     await this.setKey("token", cfg.token);
     await this.send("ESPM:PROVISION");
-    const r = await this.readLine();
+    const r = await this.readReply(8000);
     if (!r || !r.startsWith("ESPM:OK")) throw new Error(`Provisioning failed (${r ?? "no reply"}).`);
   }
 }
