@@ -42,10 +42,12 @@ type Options struct {
 	Templates     *template.Template
 	Queue         *queue.Queue
 	Webhook       http.Handler
+	Sessions      SessionStore
 	Log           *slog.Logger
 	WorkerToken   string
 	AdminUser     string
 	AdminPassword string
+	SecureCookies bool
 }
 
 func NewRouter(opts Options) (http.Handler, error) {
@@ -72,16 +74,28 @@ func NewRouter(opts Options) (http.Handler, error) {
 		wr.Post("/v1/artifacts", uploadArtifact(opts.Artifacts, opts.Deployer, opts.Log))
 	})
 
+	guard := &authGuard{
+		sessions:      opts.Sessions,
+		password:      opts.AdminPassword,
+		secureCookies: opts.SecureCookies,
+		tmpl:          opts.Templates,
+		log:           opts.Log,
+	}
+	r.Get("/login", guard.loginPage)
+	r.With(middleware.Throttle(10)).Post("/login", guard.loginSubmit)
+	r.Post("/logout", guard.logout)
+
 	r.Group(func(ur chi.Router) {
-		ur.Use(httpx.BasicAuth(opts.AdminUser, opts.AdminPassword))
-		ur.Get("/", renderPage(opts.Devices, opts.Drivers, opts.Templates, "index.html"))
-		ur.Get("/partials/devices", renderPage(opts.Devices, opts.Drivers, opts.Templates, "devices"))
+		ur.Use(guard.middleware)
+		ur.Get("/", devicesPage(opts.Devices, opts.Drivers, opts.Templates, opts.AdminUser))
+		ur.Get("/devices", devicesPage(opts.Devices, opts.Drivers, opts.Templates, opts.AdminUser))
+		ur.Get("/partials/devices", devicesRows(opts.Devices, opts.Drivers, opts.Templates))
 		ur.Post("/devices/{id}/driver", assignDriver(opts.Devices))
 		ur.Post("/devices/{id}/rotate", rotateCredential(opts.Enroller, opts.Bus, opts.Log))
 		ur.Post("/devices/{id}/revoke", revokeCredential(opts.Enroller, opts.Bus, opts.Log))
-		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates))
-		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates))
-		ur.Post("/devices/enroll", enrollDevice(opts.Enroller, opts.Templates))
+		ur.Get("/drivers", driversPage(opts.Drivers, opts.Templates, opts.AdminUser))
+		ur.Post("/drivers", createDriver(opts.Drivers, opts.Templates, opts.AdminUser))
+		ur.Post("/devices/enroll", enrollDevice(opts.Enroller, opts.Templates, opts.AdminUser))
 		ur.Get("/events", opts.Hub.Handler())
 	})
 

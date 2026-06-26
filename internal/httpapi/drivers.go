@@ -32,7 +32,7 @@ func webhookPath(driverID string) string {
 	return "/webhook/git/" + driverID
 }
 
-func driversPage(drivers DriverService, tmpl *template.Template) http.HandlerFunc {
+func driversPage(drivers DriverService, tmpl *template.Template, user string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		list, err := drivers.List(r.Context())
 		if err != nil {
@@ -53,11 +53,17 @@ func driversPage(drivers DriverService, tmpl *template.Template) http.HandlerFun
 			})
 		}
 
-		render(w, tmpl, "drivers.html", data)
+		renderShell(w, tmpl, pageView{
+			Title:   "Drivers",
+			Nav:     "drivers",
+			User:    user,
+			Content: "page-drivers",
+			Data:    data,
+		})
 	}
 }
 
-func createDriver(drivers DriverService, tmpl *template.Template) http.HandlerFunc {
+func createDriver(drivers DriverService, tmpl *template.Template, user string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		d, err := drivers.Create(r.Context(), driver.NewDriver{
 			Name:    r.FormValue("name"),
@@ -71,18 +77,17 @@ func createDriver(drivers DriverService, tmpl *template.Template) http.HandlerFu
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
-			render(w, tmpl, "driver_created.html", createdDriverData{
-				Name:          d.Name,
-				WebhookURL:    webhookPath(d.ID),
-				WebhookSecret: d.WebhookSecret,
+			renderShell(w, tmpl, pageView{
+				Title:   "Driver created",
+				Nav:     "drivers",
+				User:    user,
+				Content: "page-driver-created",
+				Data: createdDriverData{
+					Name:          d.Name,
+					WebhookURL:    webhookPath(d.ID),
+					WebhookSecret: d.WebhookSecret,
+				},
 			})
 		}
-	}
-}
-
-func render(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

@@ -29,16 +29,22 @@ type DeviceBus interface {
 	Online(deviceID string) bool
 }
 
-func enrollDevice(enroller Enroller, tmpl *template.Template) http.HandlerFunc {
+func enrollDevice(enroller Enroller, tmpl *template.Template, user string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t, err := enroller.Mint(r.Context())
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		render(w, tmpl, "device_enrolled.html", map[string]string{
-			"Token":     t.Value,
-			"ExpiresAt": t.ExpiresAt.Format("2006-01-02 15:04:05 MST"),
+		renderShell(w, tmpl, pageView{
+			Title:   "Device enrolled",
+			Nav:     "devices",
+			User:    user,
+			Content: "page-device-enrolled",
+			Data: map[string]string{
+				"Token":     t.Value,
+				"ExpiresAt": t.ExpiresAt.Format("2006-01-02 15:04:05 MST"),
+			},
 		})
 	}
 }

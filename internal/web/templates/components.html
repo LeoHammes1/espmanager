@@ -1,0 +1,21 @@
+{{define "statusbadge"}}<span class="badge" data-status="{{.Status}}">{{.Label}}</span>{{end}}
+
+{{define "onlinedot"}}<span class="dot" data-online="{{if .}}true{{else}}false{{end}}" role="img" aria-label="{{if .}}online{{else}}offline{{end}}"></span>{{end}}
+
+{{define "empty"}}
+<div class="empty">
+  <span class="ico" aria-hidden="true">{{.Icon}}</span>
+  <h3>{{.Title}}</h3>
+  <div>{{.Body}}</div>
+</div>
+{{end}}
+
+{{define "secret"}}
+<div class="secret">
+  <div class="row">
+    <code>{{.Value}}</code>
+    <button class="btn ghost" type="button" data-copy="{{.Value}}" aria-label="Copy {{.Label}}">Copy</button>
+  </div>
+  <p class="warn-text">{{.Note}}</p>
+</div>
+{{end}}

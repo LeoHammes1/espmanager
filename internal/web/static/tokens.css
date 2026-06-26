@@ -1,0 +1,86 @@
+:root {
+  color-scheme: dark;
+
+  /* Raw palette (mode-stable) */
+  --gray-950: #0b0d11;
+  --gray-900: #0f1115;
+  --gray-850: #13161c;
+  --gray-800: #181b21;
+  --gray-750: #1c2230;
+  --gray-700: #22262f;
+  --gray-600: #2a2f3a;
+  --gray-500: #3a4150;
+  --gray-400: #5f6675;
+  --gray-300: #9aa3af;
+  --gray-200: #cdd2da;
+  --gray-100: #e6e8eb;
+
+  --blue-500: #4f8cff;
+  --blue-300: #7fb0ff;
+  --blue-bg: rgba(79, 140, 255, 0.16);
+  --green-500: #2ecc71;
+  --green-bg: rgba(46, 204, 113, 0.16);
+  --amber-500: #f0b429;
+  --amber-bg: rgba(240, 180, 41, 0.16);
+  --red-500: #e57373;
+  --red-bg: rgba(229, 115, 115, 0.16);
+  --slate-500: #6b7280;
+  --slate-bg: rgba(107, 114, 128, 0.18);
+
+  /* Semantic tokens — components consume these, never the raw palette */
+  --bg-page: var(--gray-900);
+  --bg-surface: var(--gray-800);
+  --bg-surface-2: var(--gray-750);
+  --bg-sidebar: var(--gray-850);
+  --border: var(--gray-600);
+  --border-strong: var(--gray-500);
+  --border-subtle: var(--gray-700);
+  --text: var(--gray-100);
+  --text-secondary: var(--gray-300);
+  --text-muted: var(--gray-400);
+  --accent: var(--blue-500);
+  --accent-weak: var(--blue-bg);
+  --danger: var(--red-500);
+  --danger-bg: var(--red-bg);
+  --warn: var(--amber-500);
+  --warn-bg: var(--amber-bg);
+  --focus-ring: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--accent);
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* Status colors, grouped by meaning. The single StatusBadge maps each
+     data-status to one of these groups in app.css; neutral statuses
+     (offline/pending) fall through to the badge default. */
+  --st-ok-fg: var(--green-500);
+  --st-ok-bg: var(--green-bg);
+  --st-active-fg: var(--blue-300);
+  --st-active-bg: var(--blue-bg);
+  --st-warn-fg: var(--amber-500);
+  --st-warn-bg: var(--amber-bg);
+  --st-fail-fg: var(--red-500);
+  --st-fail-bg: var(--red-bg);
+
+  /* Typography */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-display: 1.5rem;
+  --fs-h1: 1.0625rem;
+  --fs-h2: 0.9375rem;
+  --fs-body: 0.875rem;
+  --fs-sm: 0.8125rem;
+  --fs-xs: 0.75rem;
+
+  /* Spacing / radius / layout */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --sidebar-w: 188px;
+  --header-h: 52px;
+  --content-pad: 20px;
+}

@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +27,6 @@ import (
 	"github.com/LeoHammes1/espmanager/internal/signclient"
 	sqlitestore "github.com/LeoHammes1/espmanager/internal/store/sqlite"
 	"github.com/LeoHammes1/espmanager/internal/topics"
-	"github.com/LeoHammes1/espmanager/internal/web"
 	"github.com/LeoHammes1/espmanager/internal/webhook"
 )
 
@@ -98,7 +97,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	tmpl, err := template.ParseFS(web.FS, "templates/*.html")
+	tmpl, err := httpapi.ParseTemplates()
 	if err != nil {
 		return err
 	}
@@ -114,10 +113,12 @@ func run(log *slog.Logger) error {
 		Templates:     tmpl,
 		Queue:         jobs,
 		Webhook:       webhook.NewHandler(driverSvc, jobs, log),
+		Sessions:      sqlitestore.NewSessionRepository(db),
 		Log:           log,
 		WorkerToken:   cfg.WorkerToken,
 		AdminUser:     cfg.AdminUser,
 		AdminPassword: cfg.AdminPassword,
+		SecureCookies: strings.HasPrefix(cfg.PublicURL, "https://"),
 	})
 	if err != nil {
 		return err

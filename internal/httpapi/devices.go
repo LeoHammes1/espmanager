@@ -13,13 +13,13 @@ import (
 )
 
 type deviceView struct {
-	ID       string
-	Name     string
-	ChipType string
-	Version  string
-	LastSeen string
-	DriverID string
-	Online   bool
+	ID         string
+	Name       string
+	Version    string
+	LastSeenAt time.Time
+	DriverID   string
+	DriverName string
+	Online     bool
 }
 
 type driverOption struct {
@@ -27,49 +27,68 @@ type driverOption struct {
 	Name string
 }
 
-type pageData struct {
+type devicesData struct {
 	Devices []deviceView
 	Drivers []driverOption
 }
 
-func renderPage(devices DeviceService, drivers DriverService, tmpl *template.Template, name string) http.HandlerFunc {
+func devicesPage(devices DeviceService, drivers DriverService, tmpl *template.Template, user string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := pageDataFor(r.Context(), devices, drivers)
+		data, err := devicesDataFor(r.Context(), devices, drivers)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, tmpl, name, data)
+		renderShell(w, tmpl, pageView{
+			Title:   "Devices",
+			Nav:     "devices",
+			User:    user,
+			Content: "page-devices",
+			Data:    data,
+		})
 	}
 }
 
-func pageDataFor(ctx context.Context, devices DeviceService, drivers DriverService) (pageData, error) {
+func devicesRows(devices DeviceService, drivers DriverService, tmpl *template.Template) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data, err := devicesDataFor(r.Context(), devices, drivers)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		render(w, tmpl, "devices-rows", data)
+	}
+}
+
+func devicesDataFor(ctx context.Context, devices DeviceService, drivers DriverService) (devicesData, error) {
 	ds, err := devices.List(ctx)
 	if err != nil {
-		return pageData{}, err
+		return devicesData{}, err
 	}
 	drs, err := drivers.List(ctx)
 	if err != nil {
-		return pageData{}, err
+		return devicesData{}, err
 	}
 
-	data := pageData{
+	names := make(map[string]string, len(drs))
+	data := devicesData{
 		Devices: make([]deviceView, 0, len(ds)),
 		Drivers: make([]driverOption, 0, len(drs)),
 	}
+	for _, d := range drs {
+		names[d.ID] = d.Name
+		data.Drivers = append(data.Drivers, driverOption{ID: d.ID, Name: d.Name})
+	}
 	for _, d := range ds {
 		data.Devices = append(data.Devices, deviceView{
-			ID:       d.ID,
-			Name:     d.Name,
-			ChipType: d.ChipType,
-			Version:  d.ReportedVersion,
-			DriverID: d.DriverID,
-			Online:   d.Online,
-			LastSeen: formatLastSeen(d.LastSeenAt),
+			ID:         d.ID,
+			Name:       d.Name,
+			Version:    d.ReportedVersion,
+			LastSeenAt: d.LastSeenAt,
+			DriverID:   d.DriverID,
+			DriverName: names[d.DriverID],
+			Online:     d.Online,
 		})
-	}
-	for _, d := range drs {
-		data.Drivers = append(data.Drivers, driverOption{ID: d.ID, Name: d.Name})
 	}
 	return data, nil
 }
@@ -85,14 +104,7 @@ func assignDriver(devices DeviceService) http.HandlerFunc {
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
-			http.Redirect(w, r, "/", http.StatusSeeOther)
+			http.Redirect(w, r, "/devices", http.StatusSeeOther)
 		}
 	}
-}
-
-func formatLastSeen(t time.Time) string {
-	if t.IsZero() {
-		return "—"
-	}
-	return t.Format("2006-01-02 15:04:05")
 }

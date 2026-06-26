@@ -1,48 +1,98 @@
-<!doctype html>
-<html lang="pt-br">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESPManager — Drivers</title>
-  <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-  {{template "nav"}}
-  <main>
-    <h1>Drivers</h1>
-    <form method="post" action="/drivers" class="driver-form">
-      <input name="name" placeholder="Nome" required>
-      <input name="repo_url" placeholder="https://git.exemplo/repo.git" required>
-      <input name="branch" placeholder="main">
-      <input name="pio_env" placeholder="esp32dev">
-      <button type="submit">Criar driver</button>
-    </form>
-    <table class="grid">
+{{define "page-drivers"}}
+<section class="panel">
+  <header>
+    <h2>Drivers</h2>
+    <span class="muted">{{len .Drivers}} total</span>
+  </header>
+  <div class="body flush table-scroll">
+    <table class="table">
       <thead>
         <tr>
-          <th>Nome</th>
-          <th>Repositório</th>
-          <th>Branch</th>
-          <th>Env</th>
-          <th>Webhook</th>
-          <th>Criado</th>
+          <th scope="col">Driver</th>
+          <th scope="col">Source</th>
+          <th scope="col">Env</th>
+          <th scope="col">Webhook</th>
+          <th scope="col">Created</th>
         </tr>
       </thead>
       <tbody>
         {{range .Drivers}}
         <tr>
-          <td>{{.Name}}</td>
-          <td>{{.RepoURL}}</td>
-          <td>{{.Branch}}</td>
-          <td>{{if .PioEnv}}{{.PioEnv}}{{else}}—{{end}}</td>
-          <td><code>{{.WebhookURL}}</code></td>
-          <td>{{.CreatedAt}}</td>
+          <td>{{.Name}}<span class="sub mono">{{.ID}}</span></td>
+          <td>{{.RepoURL}}<span class="sub">{{.Branch}}</span></td>
+          <td class="mono">{{if .PioEnv}}{{.PioEnv}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td><button class="btn ghost" type="button" data-copy="{{.WebhookURL}}" aria-label="Copy webhook path for {{.Name}}">Copy path</button></td>
+          <td class="muted">{{.CreatedAt}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="empty">Nenhum driver cadastrado.</td></tr>
+        <tr>
+          <td colspan="5">
+            {{template "empty" (dict "Icon" "◇" "Title" "No drivers yet" "Body" "A driver links a firmware repository to the devices that run it. Create one below.")}}
+          </td>
+        </tr>
         {{end}}
       </tbody>
     </table>
-  </main>
-</body>
-</html>
+  </div>
+</section>
+
+<section class="panel" id="new-driver">
+  <header><h2>New driver</h2></header>
+  <div class="body">
+    <p class="muted" style="margin-top:0">A driver maps a git repository + branch to a PlatformIO build. Pushes to the branch build and roll out automatically.</p>
+    <form method="post" action="/drivers">
+      <div class="field">
+        <label for="d-name">Name</label>
+        <input id="d-name" name="name" required>
+      </div>
+      <div class="field">
+        <label for="d-repo">Repository URL</label>
+        <input id="d-repo" name="repo_url" placeholder="https://github.com/you/firmware.git" required>
+      </div>
+      <div class="field">
+        <label for="d-branch">Branch</label>
+        <input id="d-branch" name="branch" placeholder="main">
+      </div>
+      <div class="field">
+        <label for="d-env">PlatformIO env</label>
+        <input id="d-env" name="pio_env" placeholder="esp32dev">
+        <span class="help">The <code class="mono">[env:&hellip;]</code> section to build. Leave blank to use the project default.</span>
+      </div>
+      <button class="btn primary" type="submit">Create driver</button>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "page-driver-created"}}
+<section class="panel" style="max-width:600px">
+  <header><h2>Driver “{{.Name}}” created</h2></header>
+  <div class="body">
+    <p class="muted" style="margin-top:0">Add this webhook to your git host so each push builds and rolls out.</p>
+    <div class="field">
+      <label>Webhook URL</label>
+      <div class="secret"><div class="row"><code>{{.WebhookURL}}</code><button class="btn ghost" type="button" data-copy="{{.WebhookURL}}" aria-label="Copy webhook URL">Copy</button></div></div>
+    </div>
+    <div class="field">
+      <label>Webhook secret</label>
+      {{template "secret" (dict "Value" .WebhookSecret "Label" "webhook secret" "Note" "Store it now — it is not shown again.")}}
+    </div>
+    <a class="btn" href="/drivers">Back to drivers</a>
+  </div>
+</section>
+{{end}}
+
+{{define "page-device-enrolled"}}
+<section class="panel" style="max-width:600px">
+  <header><h2>Device enrolled</h2></header>
+  <div class="body">
+    <p class="muted" style="margin-top:0">Flash this claim token to the device. On first boot it exchanges the token for its MQTT credential.</p>
+    <div class="field">
+      <label>Claim token</label>
+      {{template "secret" (dict "Value" .Token "Label" "claim token" "Note" "Store it now — it is not shown again.")}}
+    </div>
+    <p class="help">Expires {{.ExpiresAt}}.</p>
+    <a class="btn" href="/devices">Back to devices</a>
+  </div>
+</section>
+{{end}}

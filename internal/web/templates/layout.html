@@ -1,0 +1,46 @@
+{{define "layout"}}<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · ESPManager</title>
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <div class="shell">
+    {{template "sidebar" .}}
+    <header class="header">
+      <button class="btn ghost hamburger" data-sidebar-toggle aria-label="Toggle navigation">≡</button>
+      <h1>{{.Title}}</h1>
+      <div class="actions">
+        <span class="account">{{.User}}</span>
+        <form method="post" action="/logout"><button class="btn ghost" type="submit">Log out</button></form>
+      </div>
+    </header>
+    <main id="main" class="content">
+      {{partial .Content .Data}}
+    </main>
+  </div>
+  <div id="scrim" class="scrim"></div>
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-label="Panel"><div id="drawer-body"></div></aside>
+  <div id="toasts" aria-live="polite" aria-atomic="false"></div>
+  <div id="sr-announce" class="sr-only" aria-live="polite"></div>
+</body>
+</html>{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="brand"><span class="brand-mark">E</span> ESPManager</div>
+  <nav>
+    <a href="/devices"{{if eq .Nav "devices"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">▤</span> Devices</a>
+    <a href="/drivers"{{if eq .Nav "drivers"}} aria-current="page"{{end}}><span class="ico" aria-hidden="true">◇</span> Drivers</a>
+  </nav>
+  <div class="sidebar-foot">
+    <span class="livedot" data-state="connecting"><span data-live-label>Reconnecting</span></span>
+  </div>
+</aside>
+{{end}}
