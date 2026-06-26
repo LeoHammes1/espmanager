@@ -10,11 +10,12 @@ import (
 type Status string
 
 const (
-	StatusPending   Status = "pending"
-	StatusTriggered Status = "triggered"
-	StatusSucceeded Status = "succeeded"
-	StatusFailed    Status = "failed"
-	StatusLost      Status = "lost"
+	StatusPending     Status = "pending"
+	StatusTriggered   Status = "triggered"
+	StatusDownloading Status = "downloading"
+	StatusSucceeded   Status = "succeeded"
+	StatusFailed      Status = "failed"
+	StatusLost        Status = "lost"
 )
 
 type State string
@@ -37,6 +38,7 @@ type Target struct {
 	DeployID  string
 	DeviceID  string
 	Version   string
+	Sequence  int64
 	Batch     int
 	Status    Status
 	UpdatedAt time.Time
@@ -46,6 +48,7 @@ type Repository interface {
 	CreateDeploy(ctx context.Context, d Deploy) error
 	AddTarget(ctx context.Context, t Target) error
 	AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status Status, at time.Time) (int64, error)
+	AdvanceTargetStatusBySequence(ctx context.Context, deviceID string, sequence int64, status Status, at time.Time) (int64, error)
 	LatestTargetForDevice(ctx context.Context, deviceID string) (Target, bool, error)
 	ListActiveDeploys(ctx context.Context) ([]Deploy, error)
 	TargetsForDeploy(ctx context.Context, deployID string) ([]Target, error)

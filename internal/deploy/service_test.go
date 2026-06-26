@@ -35,7 +35,22 @@ func (r *fakeRepo) AdvanceTargetStatus(_ context.Context, _, deviceID string, st
 		if r.targets[i].DeviceID != deviceID {
 			continue
 		}
-		if terminal(r.targets[i].Status) {
+		if terminal(r.targets[i].Status) || r.targets[i].Status == status {
+			return 0, nil
+		}
+		r.targets[i].Status = status
+		r.targets[i].UpdatedAt = at
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func (r *fakeRepo) AdvanceTargetStatusBySequence(_ context.Context, deviceID string, sequence int64, status Status, at time.Time) (int64, error) {
+	for i := range r.targets {
+		if r.targets[i].DeviceID != deviceID || r.targets[i].Sequence != sequence {
+			continue
+		}
+		if terminal(r.targets[i].Status) || r.targets[i].Status == status {
 			return 0, nil
 		}
 		r.targets[i].Status = status
@@ -202,6 +217,90 @@ func TestReconcileMarksLostAfterTimeout(t *testing.T) {
 	for _, d := range repo.deploys {
 		if d.State != StatePaused {
 			t.Fatalf("single lost canary should pause deploy, got %s", d.State)
+		}
+	}
+}
+
+func TestOnStatusMatchesBySequence(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1"}}, "https://espm.test", Options{CanaryPercent: 100, FailureThreshold: 20})
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	// A report for a different sequence must not touch this target.
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"failed","sequence":"999"}`))
+	if repo.statusOf("d1") != StatusTriggered {
+		t.Fatalf("stale-sequence report must not change the target, got %s", repo.statusOf("d1"))
+	}
+	// The matching sequence (artifact sequence is 1) advances it.
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"ok","sequence":"1"}`))
+	if repo.statusOf("d1") != StatusSucceeded {
+		t.Fatalf("matching-sequence report should succeed the target, got %s", repo.statusOf("d1"))
+	}
+}
+
+func TestReconcileResendsTriggeredCommand(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1"}}, "https://espm.test", Options{CanaryPercent: 100, FailureThreshold: 20, TargetTimeout: time.Hour})
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	delete(pub.sent, topics.CmdOTA("d1"))
+	svc.Reconcile(context.Background())
+	if _, ok := pub.sent[topics.CmdOTA("d1")]; !ok {
+		t.Fatal("reconcile should re-deliver the command to a still-triggered device")
+	}
+
+	// Once the device acknowledges (downloading), the command is no longer resent.
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"updating","sequence":"1"}`))
+	if repo.statusOf("d1") != StatusDownloading {
+		t.Fatalf("updating report should move target to downloading, got %s", repo.statusOf("d1"))
+	}
+	delete(pub.sent, topics.CmdOTA("d1"))
+	svc.Reconcile(context.Background())
+	if _, ok := pub.sent[topics.CmdOTA("d1")]; ok {
+		t.Fatal("a downloading device must not be resent the command")
+	}
+}
+
+func TestRepeatedDownloadingStillTimesOut(t *testing.T) {
+	repo := newFakeRepo()
+	pub := &fakePublisher{sent: map[string][]byte{}}
+	svc := newService(repo, pub, fakeDevices{ids: []string{"d1"}}, "https://espm.test", Options{CanaryPercent: 100, FailureThreshold: 20, TargetTimeout: time.Minute})
+
+	base := time.Unix(2000, 0).UTC()
+	svc.now = func() time.Time { return base }
+	_ = svc.Rollout(context.Background(), "drv", "v1")
+
+	svc.now = func() time.Time { return base.Add(10 * time.Second) }
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"updating","sequence":"1"}`))
+	// Repeated downloading reports must not keep pushing the timeout out.
+	svc.now = func() time.Time { return base.Add(40 * time.Second) }
+	svc.OnStatus(context.Background(), "d1", []byte(`{"status":"updating","sequence":"1"}`))
+
+	svc.now = func() time.Time { return base.Add(80 * time.Second) }
+	svc.Reconcile(context.Background())
+	if repo.statusOf("d1") != StatusLost {
+		t.Fatalf("a stuck downloading target must eventually be lost, got %s", repo.statusOf("d1"))
+	}
+}
+
+func TestOnStatusToleratesSequenceShapes(t *testing.T) {
+	for _, payload := range []string{
+		`{"status":"ok","sequence":"1"}`,
+		`{"status":"ok","sequence":1}`,
+		`{"status":"ok","sequence":""}`,
+		`{"status":"ok","sequence":null}`,
+		`{"status":"ok"}`,
+	} {
+		repo := newFakeRepo()
+		pub := &fakePublisher{sent: map[string][]byte{}}
+		svc := newService(repo, pub, fakeDevices{ids: []string{"d1"}}, "https://espm.test", Options{CanaryPercent: 100, FailureThreshold: 20})
+		_ = svc.Rollout(context.Background(), "drv", "v1")
+
+		svc.OnStatus(context.Background(), "d1", []byte(payload))
+		if repo.statusOf("d1") != StatusSucceeded {
+			t.Fatalf("payload %s should still advance the target, got %s", payload, repo.statusOf("d1"))
 		}
 	}
 }

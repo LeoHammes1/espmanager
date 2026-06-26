@@ -1,5 +1,7 @@
 #include "espmanager_client.h"
 
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -31,6 +33,7 @@ static const char *TAG = "espmanager";
 #define KEY_TARGET "otatarget"
 #define KEY_PENDSEQ "otapendseq"
 #define KEY_FLOOR "otaseq"
+#define KEY_FAILEDSEQ "otafailseq"
 #define WIFI_CONNECTED_BIT BIT0
 
 typedef struct {
@@ -49,6 +52,7 @@ static char s_password[96];
 static char s_lwt_topic[80];
 static uint64_t s_floor;
 static uint64_t s_pendingSeq;
+static uint64_t s_failedSeq;
 static portMUX_TYPE s_floorLock = portMUX_INITIALIZER_UNLOCKED;
 static esp_mqtt_client_handle_t s_mqtt;
 static EventGroupHandle_t s_wifi_eg;
@@ -141,12 +145,15 @@ static void make_topic(char *buf, size_t n, const char *suffix) {
 	snprintf(buf, n, "espmanager/%s/%s", s_device_id, suffix);
 }
 
-static void report_ota(const char *status) {
+static void report_ota(const char *status, uint64_t sequence) {
 	if (!s_mqtt) {
 		return;
 	}
+	char seqstr[21];
+	snprintf(seqstr, sizeof(seqstr), "%llu", (unsigned long long)sequence);
 	cJSON *o = cJSON_CreateObject();
 	cJSON_AddStringToObject(o, "status", status);
+	cJSON_AddStringToObject(o, "sequence", seqstr);
 	char *s = cJSON_PrintUnformatted(o);
 	char t[80];
 	make_topic(t, sizeof(t), "ota/status");
@@ -265,7 +272,7 @@ static bool download_verify_apply(const ota_cmd_t *cmd) {
 		return false;
 	}
 
-	report_ota("updating");
+	report_ota("updating", cmd->sequence);
 
 	esp_http_client_config_t hc = {.url = cmd->url, .timeout_ms = 20000};
 	esp_http_client_handle_t c = esp_http_client_init(&hc);
@@ -358,7 +365,7 @@ static void ota_task(void *arg) {
 		if (xQueueReceive(s_ota_queue, &cmd, portMAX_DELAY) == pdTRUE) {
 			if (!download_verify_apply(&cmd)) {
 				clear_inflight(cmd.sequence);
-				report_ota("failed");
+				report_ota("failed", cmd.sequence);
 			}
 		}
 	}
@@ -401,9 +408,13 @@ static void confirm_task(void *arg) {
 	if (advance) {
 		nvs_store_u64(KEY_FLOOR, pending);
 	}
+	// A newer image confirmed; any earlier failed-sequence quarantine is now below
+	// the floor and no longer needed.
+	s_failedSeq = 0;
+	nvs_clear(KEY_FAILEDSEQ);
 	nvs_clear(KEY_TARGET);
 	nvs_clear(KEY_PENDSEQ);
-	report_ota("ok");
+	report_ota("ok", pending);
 	vTaskDelete(NULL);
 }
 
@@ -433,6 +444,10 @@ static void arm_confirmation(void) {
 		nvs_clear(KEY_PENDSEQ);
 		if (pending > s_floor) {
 			s_report_rollback_failed = true;
+			// Quarantine the rolled-back sequence so a re-published bad image is not
+			// applied again in an endless reboot loop.
+			s_failedSeq = pending;
+			nvs_store_u64(KEY_FAILEDSEQ, pending);
 		}
 	}
 }
@@ -448,8 +463,24 @@ static void handle_cmd_ota(const char *data, int len) {
 	cJSON *sig = cJSON_GetObjectItem(j, "signature");
 	cJSON *seq = cJSON_GetObjectItem(j, "sequence");
 
-	if (cJSON_IsString(ver) && cJSON_IsString(url) && cJSON_IsString(sha) && cJSON_IsString(sig) && cJSON_IsNumber(seq)) {
-		uint64_t sequence = (uint64_t)seq->valuedouble;
+	// The sequence is carried as a string so the full 64-bit value survives JSON
+	// (a JSON number is a double and loses precision above 2^53).
+	if (cJSON_IsString(ver) && cJSON_IsString(url) && cJSON_IsString(sha) && cJSON_IsString(sig) && cJSON_IsString(seq)) {
+		char *end = NULL;
+		errno = 0;
+		uint64_t sequence = strtoull(seq->valuestring, &end, 10);
+		if (seq->valuestring[0] == '\0' || end == seq->valuestring || *end != '\0' || errno == ERANGE) {
+			cJSON_Delete(j);
+			return;
+		}
+
+		// A sequence that already failed and rolled back is quarantined: re-applying
+		// it would just loop through the same bad image.
+		if (s_failedSeq != 0 && sequence == s_failedSeq) {
+			report_ota("failed", sequence);
+			cJSON_Delete(j);
+			return;
+		}
 
 		// Claim the single in-flight slot atomically. Only one OTA may be in
 		// flight at a time: applying a second image while the first is still
@@ -473,15 +504,17 @@ static void handle_cmd_ota(const char *data, int len) {
 			cmd.sequence = sequence;
 			if (xQueueSend(s_ota_queue, &cmd, 0) != pdTRUE) {
 				clear_inflight(sequence);
-				report_ota("failed");
+				report_ota("failed", sequence);
 			}
 		} else if (sequence < floor) {
-			report_ota("failed");
-		} else if (inflight != 0) {
-			report_ota("updating");
-		} else {
-			report_ota("ok");
+			report_ota("failed", sequence);
+		} else if (sequence == floor) {
+			report_ota("ok", sequence);
+		} else if (sequence == inflight) {
+			report_ota("updating", sequence);
 		}
+		// else: a different OTA is in flight; drop and let the server redeliver this
+		// one once the current image finishes.
 	}
 	cJSON_Delete(j);
 }
@@ -530,7 +563,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
 		publish_heartbeat();
 		if (s_report_rollback_failed) {
 			s_report_rollback_failed = false;
-			report_ota("failed");
+			report_ota("failed", s_failedSeq);
 		}
 		if (s_awaiting_confirm) {
 			s_awaiting_confirm = false;
@@ -612,6 +645,7 @@ void espmanager_start(const espmanager_config_t *cfg) {
 
 	nvs_load_str(KEY_PASS, s_password, sizeof(s_password));
 	s_floor = nvs_load_u64(KEY_FLOOR);
+	s_failedSeq = nvs_load_u64(KEY_FAILEDSEQ);
 
 	arm_confirmation();
 

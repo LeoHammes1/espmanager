@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ var (
 	ErrNoPublicURL   = errors.New("deploy: ESPM_PUBLIC_URL is not set; OTA rollout disabled")
 	ErrStaleArtifact = errors.New("deploy: artifact predates the signed-sequence scheme; re-publish to deploy")
 )
+
+const resendGracePeriod = 90 * time.Second
 
 type Options struct {
 	CanaryPercent    int
@@ -65,7 +68,7 @@ type otaCommand struct {
 	URL       string `json:"url"`
 	SHA256    string `json:"sha256"`
 	Signature string `json:"signature"`
-	Sequence  int64  `json:"sequence"`
+	Sequence  int64  `json:"sequence,string"`
 }
 
 func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
@@ -109,7 +112,7 @@ func (s *Service) Rollout(ctx context.Context, driverID, version string) error {
 		if i >= canaryCount {
 			batch = 1
 		}
-		t := Target{DeployID: d.ID, DeviceID: deviceID, Version: version, Batch: batch, Status: StatusPending, UpdatedAt: s.now().UTC()}
+		t := Target{DeployID: d.ID, DeviceID: deviceID, Version: version, Sequence: a.Sequence, Batch: batch, Status: StatusPending, UpdatedAt: s.now().UTC()}
 		if err := s.repo.AddTarget(ctx, t); err != nil {
 			errs = append(errs, fmt.Errorf("add target %s: %w", deviceID, err))
 			continue
@@ -148,9 +151,10 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 	}
 
 	now := s.now().UTC()
+	var resend []byte
 	for i := range targets {
 		t := &targets[i]
-		if t.Status == StatusTriggered && now.Sub(t.UpdatedAt) > s.opts.TargetTimeout {
+		if (t.Status == StatusTriggered || t.Status == StatusDownloading) && now.Sub(t.UpdatedAt) > s.opts.TargetTimeout {
 			n, err := s.repo.AdvanceTargetStatus(ctx, d.ID, t.DeviceID, StatusLost, now)
 			if err != nil {
 				s.log.Error("mark lost failed", "deploy", d.ID, "device", t.DeviceID, "err", err)
@@ -158,6 +162,20 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 			}
 			if n > 0 {
 				t.Status = StatusLost
+			}
+			continue
+		}
+		// Re-deliver to devices that were commanded but have not acknowledged: the
+		// non-retained command can be lost in a reconnect window. The device's
+		// sequence/in-flight guards make a duplicate command a no-op. Bounded to a
+		// short grace window after the trigger so it covers a reconnect without
+		// becoming a publish storm against a device that is simply offline.
+		if t.Status == StatusTriggered && now.Sub(t.UpdatedAt) < resendGracePeriod {
+			if resend == nil {
+				resend = s.reconcileCommand(ctx, d)
+			}
+			if resend != nil {
+				_ = s.publisher.Publish(topics.CmdOTA(t.DeviceID), resend)
 			}
 		}
 	}
@@ -181,19 +199,27 @@ func (s *Service) reconcile(ctx context.Context, d Deploy) {
 }
 
 func (s *Service) promote(ctx context.Context, d Deploy, pending []Target) {
-	a, err := s.artifacts.Get(ctx, d.DriverID, d.Version)
-	if err != nil {
-		s.log.Error("promote: artifact lookup failed", "deploy", d.ID, "err", err)
-		return
-	}
-	cmd, err := s.command(d.DriverID, d.Version, a)
-	if err != nil {
-		s.log.Error("promote: build command failed", "deploy", d.ID, "err", err)
+	cmd := s.reconcileCommand(ctx, d)
+	if cmd == nil {
 		return
 	}
 	for _, t := range pending {
 		_ = s.trigger(ctx, d.ID, t.DeviceID, cmd)
 	}
+}
+
+func (s *Service) reconcileCommand(ctx context.Context, d Deploy) []byte {
+	a, err := s.artifacts.Get(ctx, d.DriverID, d.Version)
+	if err != nil {
+		s.log.Error("artifact lookup failed", "deploy", d.ID, "err", err)
+		return nil
+	}
+	cmd, err := s.command(d.DriverID, d.Version, a)
+	if err != nil {
+		s.log.Error("build command failed", "deploy", d.ID, "err", err)
+		return nil
+	}
+	return cmd
 }
 
 func (s *Service) trigger(ctx context.Context, deployID, deviceID string, cmd []byte) error {
@@ -228,7 +254,8 @@ func (s *Service) command(driverID, version string, a artifact.Artifact) ([]byte
 
 func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte) {
 	var msg struct {
-		Status string `json:"status"`
+		Status   string          `json:"status"`
+		Sequence json.RawMessage `json:"sequence"`
 	}
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		s.log.Warn("ignoring malformed ota status", "device", deviceID, "err", err)
@@ -241,6 +268,18 @@ func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte)
 		return
 	}
 
+	now := s.now().UTC()
+	sequence := parseSequence(msg.Sequence)
+	// A sequence-tagged report is matched to the exact target it concerns, so a
+	// late or duplicated report can never mutate an unrelated deploy. Clients that
+	// do not report a sequence fall back to the most recent target.
+	if sequence > 0 {
+		if _, err := s.repo.AdvanceTargetStatusBySequence(ctx, deviceID, sequence, status, now); err != nil {
+			s.log.Error("advance deploy target failed", "device", deviceID, "err", err)
+		}
+		return
+	}
+
 	t, found, err := s.repo.LatestTargetForDevice(ctx, deviceID)
 	if err != nil {
 		s.log.Error("lookup deploy target failed", "device", deviceID, "err", err)
@@ -249,10 +288,23 @@ func (s *Service) OnStatus(ctx context.Context, deviceID string, payload []byte)
 	if !found {
 		return
 	}
-
-	if _, err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, s.now().UTC()); err != nil {
+	if _, err := s.repo.AdvanceTargetStatus(ctx, t.DeployID, deviceID, status, now); err != nil {
 		s.log.Error("advance deploy target failed", "device", deviceID, "err", err)
 	}
+}
+
+// parseSequence reads the report sequence leniently: an absent, null, empty, or
+// malformed value yields 0 (handled as a legacy/unsequenced report) rather than
+// discarding an otherwise-valid status report.
+func parseSequence(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.Trim(string(raw), `"`), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func mapStatus(reported string) Status {
@@ -262,7 +314,7 @@ func mapStatus(reported string) Status {
 	case "fail", "failed", "error":
 		return StatusFailed
 	case "downloading", "applying", "updating":
-		return StatusTriggered
+		return StatusDownloading
 	default:
 		return ""
 	}

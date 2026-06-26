@@ -26,17 +26,32 @@ func (r *DeployRepository) CreateDeploy(ctx context.Context, d deploy.Deploy) er
 
 func (r *DeployRepository) AddTarget(ctx context.Context, t deploy.Target) error {
 	_, err := r.db.ExecContext(ctx, `
-		insert into deploy_targets (deploy_id, device_id, version, batch, status, updated_at)
-		values (?, ?, ?, ?, ?, ?)`,
-		t.DeployID, t.DeviceID, t.Version, t.Batch, string(t.Status), t.UpdatedAt.UTC().Format(timeFormat))
+		insert into deploy_targets (deploy_id, device_id, version, sequence, batch, status, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?)`,
+		t.DeployID, t.DeviceID, t.Version, t.Sequence, t.Batch, string(t.Status), t.UpdatedAt.UTC().Format(timeFormat))
 	return err
 }
 
 func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, deviceID string, status deploy.Status, at time.Time) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `
 		update deploy_targets set status = ?, updated_at = ?
-		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed', 'lost')`,
-		string(status), at.UTC().Format(timeFormat), deployID, deviceID)
+		where deploy_id = ? and device_id = ? and status not in ('succeeded', 'failed', 'lost') and status <> ?`,
+		string(status), at.UTC().Format(timeFormat), deployID, deviceID, string(status))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *DeployRepository) AdvanceTargetStatusBySequence(ctx context.Context, deviceID string, sequence int64, status deploy.Status, at time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		update deploy_targets set status = ?, updated_at = ?
+		where rowid = (
+			select t.rowid from deploy_targets t join deploys d on d.id = t.deploy_id
+			where t.device_id = ? and t.sequence = ? and t.status not in ('succeeded', 'failed', 'lost') and t.status <> ?
+			order by d.created_at desc limit 1
+		)`,
+		string(status), at.UTC().Format(timeFormat), deviceID, sequence, string(status))
 	if err != nil {
 		return 0, err
 	}
@@ -45,7 +60,7 @@ func (r *DeployRepository) AdvanceTargetStatus(ctx context.Context, deployID, de
 
 func (r *DeployRepository) LatestTargetForDevice(ctx context.Context, deviceID string) (deploy.Target, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-		select t.deploy_id, t.device_id, t.version, t.batch, t.status, t.updated_at
+		select t.deploy_id, t.device_id, t.version, t.sequence, t.batch, t.status, t.updated_at
 		from deploy_targets t join deploys d on d.id = t.deploy_id
 		where t.device_id = ? order by d.created_at desc, t.updated_at desc limit 1`, deviceID)
 
@@ -84,7 +99,7 @@ func (r *DeployRepository) ListActiveDeploys(ctx context.Context) ([]deploy.Depl
 
 func (r *DeployRepository) TargetsForDeploy(ctx context.Context, deployID string) ([]deploy.Target, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		select deploy_id, device_id, version, batch, status, updated_at
+		select deploy_id, device_id, version, sequence, batch, status, updated_at
 		from deploy_targets where deploy_id = ?`, deployID)
 	if err != nil {
 		return nil, err
@@ -111,7 +126,7 @@ func (r *DeployRepository) SetDeployState(ctx context.Context, deployID string, 
 func scanTarget(s rowScanner) (deploy.Target, error) {
 	var t deploy.Target
 	var status, updatedAt string
-	if err := s.Scan(&t.DeployID, &t.DeviceID, &t.Version, &t.Batch, &status, &updatedAt); err != nil {
+	if err := s.Scan(&t.DeployID, &t.DeviceID, &t.Version, &t.Sequence, &t.Batch, &status, &updatedAt); err != nil {
 		return deploy.Target{}, err
 	}
 	t.Status = deploy.Status(status)
